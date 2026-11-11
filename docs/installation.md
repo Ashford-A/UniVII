@@ -4,7 +4,7 @@ UniVII supports Python 3.10 and newer on Linux, macOS, and Windows.
 
 ## With pip
 
-UniVII is installed from GitHub until its first PyPI release; it is not on PyPI or conda-forge yet.
+UniVII is on PyPI.
 
 ```bash
 python -m pip install "univii"
