@@ -1,0 +1,92 @@
+# -------------------------
+# Python cache / bytecode
+# -------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.dll
+
+# -------------------------
+# Build / packaging artifacts
+# -------------------------
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# -------------------------
+# Jupyter notebooks
+# -------------------------
+.ipynb_checkpoints/
+*.ipynb~
+*.nbconvert.ipynb
+
+# -------------------------
+# OS / editor cruft
+# -------------------------
+.DS_Store
+*.swp
+*.swo
+.vscode/
+.idea/
+*.orig
+
+# -------------------------
+# Logs / temp files
+# -------------------------
+*.log
+*.tmp
+*.bak
+
+# -------------------------
+# Large local data & models
+# (keep only small metadata READMEs)
+# -------------------------
+data/**
+!data/README.md
+
+saved_models/
+/figures/
+
+# allow versioned assets figures
+!assets/
+!assets/figures/
+!assets/figures/**
+
+# -------------------------
+# Environment files (optional)
+# -------------------------
+.env
+.env.*
+.venv/
+
+
+.DS_Store
+**/.DS_Store
+staged-recipes/
+docs/_build/
+results/
+
+# Documentation build artifacts
+docs/generated/
+docs/jupyter_execute/
+# Scratch output from executing the tutorials
+docs/tutorials/_run/
+
+# Generated experimental tutorial artifacts
+/docs/tutorials/experimental/fused_transformer_state.pt
+/docs/tutorials/experimental/pbmc_mosaic_atlas_test_cells.h5ad
+/docs/tutorials/experimental/pbmc_mosaic_reference/
+/docs/tutorials/experimental/tf_perturbation_effects.csv.gz
+/docs/tutorials/experimental/univi_outputs/
+univi_outputs/
+# Generated UniVI notebook artifacts (source notebooks remain tracked)
+univi_aml_bridge_reference/
+univi_aml_bridge_reference*.zip
+univi_outputs/
+.univi_cache/
+.univi_reference_tmp_*/
+gencode.v44.basic.annotation.gtf.gz
+gencode.v44.basic.annotation.gtf.part

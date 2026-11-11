@@ -1,0 +1,70 @@
+{
+  "data": {
+    "modalities": [
+      {
+        "name": "rna",
+        "h5ad_path": "../data/Hao_RNA_data.h5ad",
+        "layer": "scaled",
+        "X_key": "X",
+        "assume_log1p": true,
+        "hidden_dims": [512, 256],
+        "likelihood": "gaussian"
+      },
+      {
+        "name": "adt",
+        "h5ad_path": "../data/Hao_ADT_data.h5ad",
+        "layer": "scaled",
+        "X_key": "X",
+        "assume_log1p": true,
+        "hidden_dims": [128, 64],
+        "likelihood": "gaussian"
+      }
+    ]
+  },
+  "model": {
+    "loss_mode": "lite",
+    "v1_recon": "cross",
+    "normalize_v1_terms": true,
+
+    "latent_dim": 40,
+    "hidden_dims_default": [256, 128],
+    "encoder_dropout": 0.1,
+    "encoder_batchnorm": true,
+    "decoder_dropout": 0.0,
+    "decoder_batchnorm": false,
+    "batchnorm": true,
+
+    "beta": 5.0,
+    "gamma": 60.0,
+
+    "kl_anneal_start": 0,
+    "kl_anneal_end": 25,
+    "align_anneal_start": 0,
+    "align_anneal_end": 25
+  },
+  "training": {
+    "seed": 42,
+    "train_fraction": 0.8,
+    "batch_size": 512,
+    "num_workers": 0,
+
+    "n_epochs": 1000,
+    "lr": 0.001,
+    "weight_decay": 0.0001,
+    "grad_clip": 5.0,
+    "device": "cuda",
+    "log_every": 20,
+
+    "early_stopping": true,
+    "patience": 30,
+    "min_delta": 0.0,
+
+    "mixed_precision": false,
+    "grad_accum_steps": 1
+  },
+  "output": {
+    "dir": "../univi_runs/cite_seq_default_UniVI-lite_log1p_plus_scaled_counts",
+    "save_best": true,
+    "save_every": 0
+  }
+}

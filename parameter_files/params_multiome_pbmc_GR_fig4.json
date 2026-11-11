@@ -1,0 +1,95 @@
+{
+  "experiment": {
+    "name":        "multiome_pbmc_GR_fig4",
+    "figures":     ["GR-Fig4", "GR-Supp-FigS2"],
+    "description": "10x PBMC Multiome paired RNA+ATAC integration (10x Genomics 2021a)",
+    "accession":   "10x Genomics: 10k Human PBMCs, Multiome v1.0, Chromium X",
+    "col":         "B"
+  },
+
+  "data": {
+    "modalities":       ["rna", "atac"],
+    "rna_filename":     "rna_multiome_pbmc_10x2021a.h5ad",
+    "atac_filename":    "atac_multiome_pbmc_10x2021a.h5ad",
+    "X_key_by_mod":     {"rna": "X", "atac": "obsm:X_lsi"},
+    "split": {
+      "train_frac":       0.80,
+      "val_frac":         0.10,
+      "test_frac":        0.10,
+      "stratify_by":      "cell_type",
+      "cap_per_class":    {"train": 800, "val": 100},
+      "seed":             0,
+      "n_train":          5777,
+      "n_val":            717,
+      "n_test":           3137,
+      "note":             "capped extras allocated to test; see Table S7 Col B"
+    },
+    "preprocessing": {
+      "rna": {
+        "n_hvg":                2000,
+        "hvg_flavor":           "seurat_v3",
+        "normalize_total":      10000,
+        "log1p":                true,
+        "scale":                true,
+        "scale_max_value":      10,
+        "fit_on_train":         true,
+        "store_counts_layer":   "counts"
+      },
+      "atac": {
+        "n_peaks":              107194,
+        "tfidf":                true,
+        "lsi_n_components":     100,
+        "drop_lsi1":            false,
+        "fit_on_train":         true,
+        "store_counts_layer":   "counts",
+        "store_lsi_obsm_key":   "X_lsi",
+        "note":                 "Drop LSI1=No for Fig4 (Col B); Drop LSI1=Yes for Figs 8-10 (Cols J,K)"
+      }
+    },
+    "eval_labels":      ["cell_type"]
+  },
+
+  "model": {
+    "latent_dim":           30,
+    "beta":                 1.25,
+    "gamma":                4.35,
+    "encoder_dropout":      0.10,
+    "decoder_dropout":      0.05,
+    "encoder_batchnorm":    true,
+    "decoder_batchnorm":    false,
+    "kl_anneal_start":      50,
+    "kl_anneal_end":        85,
+    "align_anneal_start":   75,
+    "align_anneal_end":     110,
+    "loss_mode":            "v1",
+    "v1_recon":             "avg",
+    "normalize_v1_terms":   true,
+    "modalities": [
+      {
+        "name":             "rna",
+        "encoder_hidden":   [512, 256, 128],
+        "decoder_hidden":   [128, 256, 512],
+        "likelihood":       "gaussian"
+      },
+      {
+        "name":             "atac",
+        "encoder_hidden":   [128, 64],
+        "decoder_hidden":   [64, 128],
+        "likelihood":       "gaussian",
+        "note":             "input_dim set from atac.obsm['X_lsi'].shape[1] at runtime (=LSI dims after drop)"
+      }
+    ]
+  },
+
+  "training": {
+    "n_epochs":             5000,
+    "batch_size":           128,
+    "lr":                   1e-3,
+    "weight_decay":         1e-4,
+    "device":               "cuda",
+    "early_stopping":       true,
+    "patience":             300,
+    "best_epoch_warmup":    50,
+    "log_every":            25
+  }
+}
