@@ -54,7 +54,7 @@ rna_test = rna_prep.transform(rna[split["test"]])
 | `ADTPreprocessor` | raw antibody counts | per-cell CLR, optionally z-scored per protein | `scale`, `clip` |
 | `ATACPreprocessor` | raw peak or tile counts | TF-IDF then truncated SVD (LSI), optionally standardized | `n_components` (fit before dropping), `drop_first` (drop the depth-correlated first component), `method` (`"sklearn"`, `"signac"`, `"tea"`), `min_fraction` / `max_fraction` peak filters |
 
-Transformed objects keep the raw counts in `layers["counts"]` (and log-normalized RNA in `layers["log1p"]`, CLR protein in `layers["clr"]`). Seurat-v3 HVG selection needs the `scikit-misc` package (`pip install "univii[tutorials] @ git+https://github.com/Ashford-A/UniVII.git"`); the preprocessor raises an error rather than silently choosing another method.
+Transformed objects keep the raw counts in `layers["counts"]` (and log-normalized RNA in `layers["log1p"]`, CLR protein in `layers["clr"]`). Seurat-v3 HVG selection needs the `scikit-misc` package (`pip install "univii[tutorials]"`); the preprocessor raises an error rather than silently choosing another method.
 
 You do not have to use these classes. Any preprocessing works as long as `.X` holds what you want the model to see and the likelihood matches it.
 

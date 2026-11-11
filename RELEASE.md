@@ -1,6 +1,6 @@
 # Releasing UniVII
 
-Tags use the form `vX.Y.Z` (for example `v2.0.0`). The version must match in `pyproject.toml`, `univii/__init__.py`, `CITATION.cff`, `conda.recipe/meta.yaml`, and the top entry of `CHANGELOG.md`.
+Tags use the form `vX.Y.Z` (for example `v0.1.0`). The version must match in `pyproject.toml`, `univii/__init__.py`, `CITATION.cff`, `conda.recipe/meta.yaml`, and the top entry of `CHANGELOG.md`.
 
 ## Naming, in one place
 
@@ -20,7 +20,7 @@ cd UniVII
 git init -b main                                   # skip if you cloned the empty repository
 git remote add origin https://github.com/Ashford-A/UniVII.git
 git add -A
-git commit -m "UniVII 2.0.0: UniVI 1.2.1 plus latent geometry, conv encoders and spatial tools"
+git commit -m "UniVII 0.1.0: UniVI 1.2.1 plus latent geometry, conv encoders and spatial tools"
 git push -u origin main
 ```
 
@@ -84,7 +84,7 @@ git checkout main
 git pull
 git add -A
 git status                      # review the file list
-git commit -m "Release v2.0.0"
+git commit -m "Release v0.1.0"
 git push origin main
 ```
 
@@ -93,8 +93,8 @@ Wait for the GitHub Actions checks to pass.
 ## 5. Tag
 
 ```bash
-git tag -a v2.0.0 -m "Release v2.0.0"
-git push origin v2.0.0
+git tag -a v0.1.0 -m "Release v0.1.0"
+git push origin v0.1.0
 ```
 
 ## 6. Upload to PyPI
@@ -102,7 +102,7 @@ git push origin v2.0.0
 Upload the files built and checked in step 3 (rebuild them if anything changed since). The first upload registers the name `univii` to your account.
 
 ```bash
-python -m twine upload dist/univii-2.0.0.tar.gz dist/univii-2.0.0-py3-none-any.whl
+python -m twine upload dist/univii-0.1.0.tar.gz dist/univii-0.1.0-py3-none-any.whl
 ```
 
 Published files cannot be replaced; a mistake needs a new version number. If you want a rehearsal, upload to <https://test.pypi.org> first with `twine upload --repository testpypi dist/*`.
@@ -117,9 +117,9 @@ python scripts/switch_install_commands.py
 ## 7. Create the GitHub release
 
 ```bash
-awk '/^## 2.0.0/{f=1; next} /^## /{f=0} f' CHANGELOG.md > /tmp/univii-notes.md
-gh release create v2.0.0 dist/univii-2.0.0.tar.gz dist/univii-2.0.0-py3-none-any.whl \
-    --title "v2.0.0" --notes-file /tmp/univii-notes.md
+awk '/^## 0.1.0/{f=1; next} /^## /{f=0} f' CHANGELOG.md > /tmp/univii-notes.md
+gh release create v0.1.0 dist/univii-0.1.0.tar.gz dist/univii-0.1.0-py3-none-any.whl \
+    --title "v0.1.0" --notes-file /tmp/univii-notes.md
 ```
 
 or use *Releases → Draft a new release* on GitHub with the same tag, title, notes, and files. With the Zenodo integration on, the release is archived and receives a DOI within a few minutes.
@@ -128,7 +128,7 @@ or use *Releases → Draft a new release* on GitHub with the same tag, title, no
 
 ```bash
 python -m venv /tmp/univii-check && source /tmp/univii-check/bin/activate
-python -m pip install "univii==2.0.0"
+python -m pip install "univii==0.1.0"
 python -c "import univii, univii.datasets as u; print(univii.__version__); print(u.list_datasets())"
 deactivate
 ```
@@ -148,7 +148,7 @@ For later versions the conda-forge bot opens a pull request on the feedstock aft
 Verify:
 
 ```bash
-conda create -n univii-check -c conda-forge "univii=2.0.0" && conda activate univii-check
+conda create -n univii-check -c conda-forge "univii=0.1.0" && conda activate univii-check
 python -c "import univii; print(univii.__version__)"
 ```
 

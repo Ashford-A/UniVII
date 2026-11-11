@@ -7,13 +7,13 @@ UniVII supports Python 3.10 and newer on Linux, macOS, and Windows.
 UniVII is installed from GitHub until its first PyPI release; it is not on PyPI or conda-forge yet.
 
 ```bash
-python -m pip install "univii @ git+https://github.com/Ashford-A/UniVII.git"
+python -m pip install "univii"
 ```
 
 To run the tutorial notebooks locally, include the `tutorials` extra (Jupyter and `scikit-misc`, which Scanpy's Seurat-v3 highly-variable-gene selection needs):
 
 ```bash
-python -m pip install "univii[tutorials] @ git+https://github.com/Ashford-A/UniVII.git"
+python -m pip install "univii[tutorials]"
 ```
 
 ```{note}

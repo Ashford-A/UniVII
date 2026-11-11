@@ -21,7 +21,7 @@ single-modality datasets onto a multimodal reference, and generate cells.
 ## Install
 
 ```bash
-pip install "univii @ git+https://github.com/Ashford-A/UniVII.git"
+pip install "univii"
 ```
 
 UniVII is a separate package from the published `univi`; the two can be installed side by side. UniVII

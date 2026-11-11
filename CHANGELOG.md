@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.0.0
+## 0.1.0
 
 First release of **UniVII**, a new package that continues from UniVI 1.2.1 in its own repository. Everything
 below this entry is the history of UniVI, kept for reference; module paths there read `univi`.

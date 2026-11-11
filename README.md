@@ -30,7 +30,7 @@ UniVII is a separate package with its own name, `univii`. It does not replace, m
 | Status | published, stable | extensions under active development |
 | Python import | `import univi` | `import univii` |
 | Distribution and command | `univi` | `univii` |
-| Version | 1.2.1 | 2.0.0 |
+| Version | 1.2.1 | 0.1.0 |
 | Install | `pip install univi`, conda-forge | from this repository, until the first PyPI release (see below) |
 | Hosted documentation | [univi.readthedocs.io](https://univi.readthedocs.io/) | the [`docs/`](docs) folder; no hosted site yet |
 | Dataset cache | `~/.cache/univi`, `UNIVI_DATA_DIR` | `~/.cache/univii`, `UNIVII_DATA_DIR` |
@@ -56,8 +56,8 @@ Kept deliberately so files written by UniVI stay readable: the AnnData keys `X_u
 UniVII is not on PyPI or conda-forge yet. Until its first release there, install it from GitHub:
 
 ```bash
-pip install "univii @ git+https://github.com/Ashford-A/UniVII.git"
-pip install "univii[tutorials] @ git+https://github.com/Ashford-A/UniVII.git"   # adds Jupyter and scikit-misc
+pip install "univii"
+pip install "univii[tutorials]"   # adds Jupyter and scikit-misc
 ```
 
 or from a clone, for development:
@@ -71,7 +71,7 @@ pip install -e ".[tutorials,test]"
 UniVII requires PyTorch. If `import torch` fails, or you need a specific CUDA build, install PyTorch first from [pytorch.org](https://pytorch.org/get-started/locally/). Check the installation with:
 
 ```bash
-python -c "import univii; print(univii.__version__)"        # 2.0.0
+python -c "import univii; print(univii.__version__)"        # 0.1.0
 ```
 
 [RELEASE.md](RELEASE.md) describes publishing to PyPI and conda-forge under the name `univii`; once that is done the commands above become `pip install univii` and `conda install -c conda-forge univii`.
@@ -207,7 +207,7 @@ pip install -e ".[tutorials,test]"
 python -m pytest -q tests                 # unit tests and all tutorial notebooks on synthetic data
 ```
 
-What the tests do not cover, as of 2.0.0:
+What the tests do not cover, as of 0.1.0:
 
 - GPU and Apple MPS. Everything was run on CPU. On MPS the hyperbolic computations use float32; keep `hyperbolic_max_radius` at or below about 4.
 - Real Visium data. `tiles_from_visium` is tested on a synthetic AnnData in the Scanpy layout.
