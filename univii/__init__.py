@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from typing import Any, List
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 # Eager (fast/light) public API
-from .config import ModalityConfig, UniVIConfig, TrainingConfig, ClassHeadConfig, ConvConfig
+from .config import (ModalityConfig, UniVIConfig, TrainingConfig, ClassHeadConfig, ConvConfig, ViTConfig,
+                     GraphConfig)
 from .models import UniVIMultiModalVAE
 
 # The classes keep the names they have in UniVI, so code written for UniVI needs only its import
@@ -37,6 +38,23 @@ _WORKFLOW_EXPORTS = {
     "pairwise_latent_distance": "geometry",
     "refine_latent": "reference",
     "make_spatial_loader": "spatial",
+    "encode_spatial": "spatial",
+    "compare_models": "experiments",
+    "summarize": "experiments",
+    "GaussianHMM": "hmm",
+    "segment_by_order": "hmm",
+    "cluster_tree": "hierarchy",
+    "graph_pseudotime": "hierarchy",
+    "tree_agreement": "hierarchy",
+    "MixturePrior": "priors",
+    "make_mosaic_loader": "atlas",
+    "MosaicLoader": "atlas",
+    "transfer_labels": "atlas",
+    "cohort_mixing": "atlas",
+    "label_purity": "atlas",
+    "adapt_to_cohort": "atlas",
+    "encode_cohort": "atlas",
+    "MacenkoNormalizer": "histology",
     "niche_modality": "spatial",
     "tiles_from_visium": "spatial",
     "extract_tiles": "spatial",
@@ -55,6 +73,8 @@ __all__ = [
     "ModalityConfig",
     "ClassHeadConfig",
     "ConvConfig",
+    "ViTConfig",
+    "GraphConfig",
     "UniVIConfig",
     "TrainingConfig",
     # model
@@ -86,6 +106,13 @@ __all__ = [
     "geometry",
     "reference",
     "spatial",
+    "hierarchy",
+    "hmm",
+    "presets",
+    "experiments",
+    "priors",
+    "atlas",
+    "histology",
     "fused_encode_with_meta_and_attn",
     "feature_importance_for_head",
     "top_cross_modal_feature_pairs_from_attn",
@@ -129,7 +156,9 @@ def __getattr__(name: str) -> Any:
         return {"save_checkpoint": save_checkpoint, "load_checkpoint": load_checkpoint, "restore_checkpoint": restore_checkpoint}[name]
 
     # ---- modules (avoid recursive from-list resolution in __getattr__) ----
-    if name in {"pipeline", "diagnostics", "evaluation", "plotting", "interpretability", "geometry", "reference", "spatial"}:
+    if name in {"pipeline", "diagnostics", "evaluation", "plotting", "interpretability", "geometry", "reference", "spatial",
+                "hierarchy", "hmm", "presets", "experiments", "priors", "atlas",
+                "histology"}:
         from importlib import import_module
         return import_module(f".{name}", __name__)
 

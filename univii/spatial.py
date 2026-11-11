@@ -338,7 +338,55 @@ def make_spatial_loader(adata_by_mod: Mapping[str, Any], *, spatial_key: str = "
                       generator=torch.Generator().manual_seed(seed), collate_fn=collate_multimodal_xy_recon)
 
 
+def encode_spatial(model, adata_by_mod: Mapping[str, Any], *, spatial_key: str = "spatial",
+                   coords_from: Optional[str] = None, batch_size: int = 256, group_key: Optional[str] = None,
+                   n_passes: int = 1, seed: int = 0) -> np.ndarray:
+    """Embed spatial data in spatially local batches and return one latent mean per cell.
+
+    Needed for models with a graph encoder, whose output for a cell depends on
+    which neighbours share its batch. Batches are drawn as in
+    :func:`make_spatial_loader`; a cell that falls into several batches gets
+    the average of its embeddings. ``n_passes > 1`` repeats with different
+    batches and averages again, which reduces the dependence on how the tissue
+    was cut into batches.
+    """
+    from .data import MultiModalDataset, collate_multimodal_xy_recon
+
+    if spatial_key in adata_by_mod:
+        raise ValueError(f"{spatial_key!r} is already a modality name; choose another spatial_key")
+    source = coords_from or next((k for k, a in adata_by_mod.items() if spatial_key in a.obsm), None)
+    if source is None:
+        raise KeyError(f"no modality has .obsm[{spatial_key!r}]")
+    ref = adata_by_mod[source]
+    with_coords: Dict[str, Any] = dict(adata_by_mod)
+    with_coords[spatial_key] = coords_modality(ref, spatial_key)
+    dataset = MultiModalDataset(with_coords, labels=None, device=None, recon_targets_spec=None)
+    groups = None if group_key is None else ref.obs[group_key].astype(str).values
+    sampler = SpatialBlockSampler(np.asarray(ref.obsm[spatial_key]), batch_size, groups=groups, seed=seed)
+    device = next(model.parameters()).device
+    was_training = model.training
+    model.eval()
+    total, count = None, np.zeros(ref.n_obs)
+    try:
+        with torch.no_grad():
+            for _ in range(int(n_passes)):
+                for batch in sampler:
+                    item = collate_multimodal_xy_recon([dataset[i] for i in batch])
+                    x_dict = item[0] if isinstance(item, (tuple, list)) else item
+                    x_dict = {k: torch.as_tensor(v, dtype=torch.float32, device=device)
+                              for k, v in x_dict.items() if v is not None}
+                    mu = model.encode_fused(x_dict)[0].cpu().numpy()
+                    if total is None:
+                        total = np.zeros((ref.n_obs, mu.shape[1]))
+                    np.add.at(total, batch, mu)
+                    np.add.at(count, batch, 1)
+    finally:
+        model.train(was_training)
+    return total / np.maximum(count, 1)[:, None]
+
+
 __all__ = [
+    "encode_spatial",
     "knn_graph", "median_neighbor_distance", "neighborhood_weights", "neighborhood_aggregate", "niche_modality",
     "extract_tiles", "unflatten_tiles", "tiles_from_visium",
     "coords_modality", "SpatialBlockSampler", "make_spatial_loader",

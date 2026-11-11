@@ -12,6 +12,7 @@ These pages explain the choices behind a UniVI analysis. The [tutorials](../tuto
 | [Advanced features](advanced.md) | heads, refinement, transformers, alternative objectives, scripts |
 | [Latent geometry](latent_geometry.md) | use hyperbolic or product latent spaces, tree supervision, anchoring |
 | [Spatial data and conv encoders](spatial_and_conv.md) | add niche or image-tile modalities, conv or custom encoders, a spatial prior |
+| [The experiment toolkit](toolkit.md) | combine priors, contrastive alignment, linear decoders, ViT and graph encoders, hierarchy tools, an HMM, presets and a comparison runner |
 | [FAQ](faq.md) | quick answers |
 
 ```{toctree}
@@ -25,5 +26,6 @@ evaluation
 advanced
 latent_geometry
 spatial_and_conv
+toolkit
 faq
 ```

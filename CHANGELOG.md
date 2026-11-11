@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.2.0
+
+### Added
+
+- *Mixture prior*: `UniVIConfig(prior="mog", prior_components=K)` learns a mixture prior over the whole
+  latent, including hyperbolic blocks, where each component is a wrapped normal at a learned point
+  (`model.prior_centres()`). `prior_label_head` ties components to class labels, and `prior_tree_weight` arranges
+  component means like a registered label tree. `model.prior_responsibilities(z)` gives component
+  probabilities.
+- *Contrastive alignment*: `contrastive_weight` and `contrastive_temperature` add a symmetric InfoNCE term
+  between modalities, using the latent geometry's distance; reported as `contrastive`.
+- *Linear decoders*: `ModalityConfig(decoder_type="linear")` for any likelihood, with
+  `model.decoder_loadings(modality)`.
+- *Input masking*: `ModalityConfig(input_dropout=...)` zeroes a random fraction of input features at
+  training time.
+- *Vision-transformer encoder*: `encoder_type="vit"` with `ViTConfig`. Train-time `augment=("flip", "rot90")`
+  on `ViTConfig` and `ConvConfig`.
+- *Graph encoder*: `encoder_type="graph"` with `GraphConfig`, a GraphSAGE-style encoder over each batch's
+  nearest spatial neighbours; `univii.spatial.encode_spatial` embeds a dataset in spatially local batches.
+- *Hierarchy tools*: new `univii.hierarchy` module with `cluster_tree`, `graph_pseudotime`,
+  `cluster_centroids` and `tree_agreement`.
+- *Hidden Markov model*: new `univii.hmm` module with `GaussianHMM` and `segment_by_order`.
+- *Atlases, mosaics and bridges*: new `univii.atlas` module. `make_mosaic_loader` trains on cohorts that
+  measured different modalities and labels every cell with its cohort; `cohort_mixing`, `label_purity` and
+  `transfer_labels` (label, confidence, novelty) evaluate and use the result.
+- *Cohort-conditioned decoders*: `UniVIConfig(n_cohorts=K)` gives every decoder a learned cohort embedding;
+  `model.set_decode_cohort(code)` chooses the cohort used outside training.
+- *Cohort alignment*: `cohort_mmd_weight` pulls the latent means of different cohorts together with a
+  kernel two-sample penalty against a memory of recent cells from each cohort; reported as `cohort_mmd`.
+  The model warns when this is combined with encoder batch normalisation.
+- *Adding a cohort to a trained atlas*: `model.add_cohort()` and `univii.atlas.adapt_to_cohort` fit a new
+  cohort by training only a per-feature shift and a cohort-embedding row, leaving the atlas unchanged;
+  `univii.atlas.encode_cohort` embeds a cohort's cells; `model.set_cohort(code)` selects a cohort outside
+  training.
+- *Cycle consistency*: `cycle_weight` penalises the latent distance after predicting another modality and
+  encoding the prediction, including for modalities missing from the batch; reported as `cycle`.
+- *Stain normalisation*: new `univii.histology` module with `MacenkoNormalizer` for H&E tiles.
+- *Tutorial*: `docs/tutorials/toolkit.ipynb` walks through the new parts on simulated data.
+- *Presets*: new `univii.presets` module with ready-made configurations.
+- *Experiment runner*: new `univii.experiments` module with `compare_models` and `summarize`.
+- User guide page "The experiment toolkit"; `tests/test_toolkit.py`, `tests/test_atlas.py` and
+  `tests/test_extensions.py`.
+
+All of these are off by default; models built without them are unchanged.
+
 ## 0.1.0
 
 First release of **UniVII**, a new package that continues from UniVI 1.2.1 in its own repository. Everything

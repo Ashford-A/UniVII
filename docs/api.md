@@ -109,6 +109,47 @@ Most names are importable from the top-level package (`from univii import ...`);
    spatial.coords_modality
 ```
 
+## Experiment toolkit
+
+```{eval-rst}
+.. autosummary::
+   :toctree: generated
+   :nosignatures:
+
+   config.ViTConfig
+   config.GraphConfig
+   models.vision.ViTGaussianEncoder
+   models.vision.augment_images
+   models.graph.GraphGaussianEncoder
+   priors.MixturePrior
+   spatial.encode_spatial
+   hierarchy.cluster_centroids
+   hierarchy.cluster_tree
+   hierarchy.graph_pseudotime
+   hierarchy.tree_agreement
+   hmm.GaussianHMM
+   hmm.segment_by_order
+   atlas.make_mosaic_loader
+   atlas.MosaicLoader
+   atlas.adapt_to_cohort
+   atlas.encode_cohort
+   atlas.cohort_mixing
+   atlas.label_purity
+   atlas.transfer_labels
+   models.conditioning.CohortConditionedDecoder
+   histology.MacenkoNormalizer
+   histology.rgb_to_od
+   histology.od_to_rgb
+   presets.atlas_config
+   presets.paired_config
+   presets.clustered_config
+   presets.contrastive_config
+   presets.hierarchy_config
+   presets.spatial_image_config
+   experiments.compare_models
+   experiments.summarize
+```
+
 ## Embedding, prediction and generation
 
 ```{eval-rst}

@@ -14,6 +14,7 @@ It contains everything in UniVI 1.2.1 and adds:
 - **Spatial tools**: niche modalities, tissue-image tiles, spatially local batches, and a spatial smoothness prior
 - **A plug-in registry** for your own encoders and decoders, including wrapped pretrained image models
 - **Reference anchoring**: place new cells on a frozen model and score how far they sit from it
+- **An experiment toolkit**: a learned mixture prior, contrastive alignment, linear decoders, input masking, a vision-transformer and a graph encoder, mosaic training with cohort-conditioned decoders and cohort alignment, tree and pseudotime tools, a hidden Markov model, presets, and a runner that compares configurations across seeds
 
 UniVII is a separate package with its own name, `univii`. It does not replace, modify or conflict with the published `univi` package, and the two can be installed side by side.
 
@@ -30,7 +31,7 @@ UniVII is a separate package with its own name, `univii`. It does not replace, m
 | Status | published, stable | extensions under active development |
 | Python import | `import univi` | `import univii` |
 | Distribution and command | `univi` | `univii` |
-| Version | 1.2.1 | 0.1.0 |
+| Version | 1.2.1 | 0.2.0 |
 | Install | `pip install univi`, conda-forge | `pip install univii` |
 | Hosted documentation | [univi.readthedocs.io](https://univi.readthedocs.io/) | the [`docs/`](https://github.com/Ashford-A/UniVII/tree/main/docs) folder; no hosted site yet |
 | Dataset cache | `~/.cache/univi`, `UNIVI_DATA_DIR` | `~/.cache/univii`, `UNIVII_DATA_DIR` |
@@ -71,7 +72,7 @@ pip install -e ".[tutorials,test]"
 UniVII requires PyTorch. If `import torch` fails, or you need a specific CUDA build, install PyTorch first from [pytorch.org](https://pytorch.org/get-started/locally/). Check the installation with:
 
 ```bash
-python -c "import univii; print(univii.__version__)"        # 0.1.0
+python -c "import univii; print(univii.__version__)"        # 0.2.0
 ```
 
 ## Quickstart
@@ -149,6 +150,22 @@ Each feature is off by default and switched on in the configuration.
 | Image tiles and niche modalities | `univii.spatial` | [Spatial and conv](https://github.com/Ashford-A/UniVII/blob/main/docs/user_guide/spatial_and_conv.md) |
 | Spatial smoothness prior | `UniVIConfig(spatial_weight=..., spatial_sigma=...)` | [Spatial and conv](https://github.com/Ashford-A/UniVII/blob/main/docs/user_guide/spatial_and_conv.md) |
 | Your own encoder or decoder | `register_encoder`, `register_decoder` | [Spatial and conv](https://github.com/Ashford-A/UniVII/blob/main/docs/user_guide/spatial_and_conv.md) |
+| Mixture-of-Gaussians prior, optionally one component per class | `UniVIConfig(prior="mog")` | [Toolkit](https://github.com/Ashford-A/UniVII/blob/main/docs/user_guide/toolkit.md) |
+| Contrastive alignment between modalities | `UniVIConfig(contrastive_weight=...)` | [Toolkit](https://github.com/Ashford-A/UniVII/blob/main/docs/user_guide/toolkit.md) |
+| Linear decoder with readable loadings | `ModalityConfig(decoder_type="linear")` | [Toolkit](https://github.com/Ashford-A/UniVII/blob/main/docs/user_guide/toolkit.md) |
+| Input masking | `ModalityConfig(input_dropout=...)` | [Toolkit](https://github.com/Ashford-A/UniVII/blob/main/docs/user_guide/toolkit.md) |
+| Vision-transformer image encoder, image augmentation | `encoder_type="vit"`, `augment=("flip", "rot90")` | [Toolkit](https://github.com/Ashford-A/UniVII/blob/main/docs/user_guide/toolkit.md) |
+| Graph encoder over spatial neighbours | `encoder_type="graph"` | [Toolkit](https://github.com/Ashford-A/UniVII/blob/main/docs/user_guide/toolkit.md) |
+| Cluster trees, pseudotime, tree comparison | `univii.hierarchy` | [Toolkit](https://github.com/Ashford-A/UniVII/blob/main/docs/user_guide/toolkit.md) |
+| Hidden Markov model for segmenting ordered cells | `univii.hmm` | [Toolkit](https://github.com/Ashford-A/UniVII/blob/main/docs/user_guide/toolkit.md) |
+| Mosaic training over cohorts with different modalities | `univii.atlas.make_mosaic_loader` | [Toolkit](https://github.com/Ashford-A/UniVII/blob/main/docs/user_guide/toolkit.md) |
+| Cohort-conditioned decoders and cohort alignment | `UniVIConfig(n_cohorts=..., cohort_mmd_weight=...)` | [Toolkit](https://github.com/Ashford-A/UniVII/blob/main/docs/user_guide/toolkit.md) |
+| Cohort mixing, label purity, label transfer with a novelty score | `univii.atlas` | [Toolkit](https://github.com/Ashford-A/UniVII/blob/main/docs/user_guide/toolkit.md) |
+| Fit a new cohort onto a trained atlas without changing it | `univii.atlas.adapt_to_cohort` | [Toolkit](https://github.com/Ashford-A/UniVII/blob/main/docs/user_guide/toolkit.md) |
+| Cycle consistency through missing modalities | `UniVIConfig(cycle_weight=...)` | [Toolkit](https://github.com/Ashford-A/UniVII/blob/main/docs/user_guide/toolkit.md) |
+| Learned hyperbolic curvature and class prototypes | `learn_curvature=True`, `prior="mog"` | [Toolkit](https://github.com/Ashford-A/UniVII/blob/main/docs/user_guide/toolkit.md) |
+| Stain normalisation for H&E tiles | `univii.histology.MacenkoNormalizer` | [Toolkit](https://github.com/Ashford-A/UniVII/blob/main/docs/user_guide/toolkit.md) |
+| Presets and a multi-seed comparison runner | `univii.presets`, `univii.experiments` | [Toolkit](https://github.com/Ashford-A/UniVII/blob/main/docs/user_guide/toolkit.md) |
 
 ### Hyperbolic and product latent spaces
 
@@ -186,8 +203,9 @@ The UniVI tutorials are included and run against this code.
 | Add cell-type or genotype heads to a trained reference, with partial labels | [Heads and refinement](https://github.com/Ashford-A/UniVII/blob/main/docs/tutorials/supervised_heads.ipynb) |
 | Denoise, generate cells, run in-silico perturbations | [Generation](https://github.com/Ashford-A/UniVII/blob/main/docs/tutorials/generation.ipynb) |
 | Three or more modalities; count, methylation (beta-binomial) and other likelihoods | [Custom modalities](https://github.com/Ashford-A/UniVII/blob/main/docs/tutorials/custom_modalities.ipynb) |
+| Learned hyperbolic space, tree and pseudotime tools, HMM, mosaic atlas, adding a cohort, comparing configurations, stain normalisation | [Toolkit](https://github.com/Ashford-A/UniVII/blob/main/docs/tutorials/toolkit.ipynb) |
 
-There are no tutorial notebooks yet for the features UniVII adds; the two guides linked above carry the worked examples. The [user guide](https://github.com/Ashford-A/UniVII/blob/main/docs/user_guide/index.md) covers data preparation, likelihood and hyperparameter choices, evaluation metrics, and saving models.
+The toolkit tutorial runs on simulated data, so every step is checked against a known answer. The [user guide](https://github.com/Ashford-A/UniVII/blob/main/docs/user_guide/index.md) covers data preparation, likelihood and hyperparameter choices, evaluation metrics, and saving models.
 
 ## Documentation
 
@@ -205,7 +223,7 @@ pip install -e ".[tutorials,test]"
 python -m pytest -q tests                 # unit tests and all tutorial notebooks on synthetic data
 ```
 
-What the tests do not cover, as of 0.1.0:
+What the tests do not cover, as of 0.2.0:
 
 - GPU and Apple MPS. Everything was run on CPU. On MPS the hyperbolic computations use float32; keep `hyperbolic_max_radius` at or below about 4.
 - Real Visium data. `tiles_from_visium` is tested on a synthetic AnnData in the Scanpy layout.
@@ -247,6 +265,15 @@ univii/                 the Python package
   geometry.py           latent geometry: hyperbolic and product spaces, anchoring, label-tree loss
   reference.py          placing and scoring cells against a frozen model
   spatial.py            niche modalities, image tiles, spatial batching
+  priors.py             learned mixture prior
+  atlas.py              mosaic loader, new-cohort adaptation, cohort mixing and label transfer
+  histology.py          stain normalisation for image tiles
+  hierarchy.py          cluster trees, pseudotime, tree comparison
+  hmm.py                hidden Markov model for ordered data
+  presets.py            ready-made configurations
+  experiments.py        train and compare configurations across seeds
+  models/vision.py      vision-transformer encoder, image augmentation
+  models/graph.py       graph encoder
   models/conv.py        convolutional encoders and decoders, backbone wrapper
   models/registry.py    plug-in registry for encoders and decoders
 docs/                   documentation source; tutorials are the notebooks in docs/tutorials/

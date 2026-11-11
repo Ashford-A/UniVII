@@ -112,6 +112,9 @@ class ConvConfig:
     hidden_dim: int = 256                      # dense layer between the feature map and the latent
     upsample: Literal["nearest", "transpose"] = "nearest"  # decoder upsampling
     output_activation: Literal["none", "sigmoid"] = "none"  # decoder mean; "sigmoid" for data in [0, 1]
+    # Train-time augmentation of the encoder input (2-D only): any of "flip", "rot90".
+    # The reconstruction target is the un-augmented image.
+    augment: Sequence[str] = ()
 
     @property
     def ndim(self) -> int:
@@ -154,6 +157,86 @@ class ConvConfig:
             raise ValueError(
                 f"Modality {mod_name!r}: input_dim={input_dim} must equal in_channels * prod(spatial_shape) "
                 f"= {self.flat_dim}")
+        _validate_augment(pre, self.augment, shape)
+
+
+def _validate_augment(pre: str, augment: Sequence[str], shape: Sequence[int]) -> None:
+    bad = [a for a in augment if a not in ("flip", "rot90")]
+    if bad:
+        raise ValueError(f"{pre}.augment entries must be 'flip' or 'rot90', got {bad}")
+    if augment and len(shape) != 2:
+        raise ValueError(f"{pre}.augment is only available for 2-D inputs")
+    if "rot90" in augment and shape[0] != shape[1]:
+        raise ValueError(f"{pre}.augment 'rot90' needs square inputs, got {tuple(shape)}")
+
+
+@dataclass
+class ViTConfig:
+    """Vision-transformer encoder settings for image modalities.
+
+    Like conv modalities, the image is stored flat as ``(cells, C * H * W)`` in
+    channel-first order. It is cut into non-overlapping ``patch_size`` patches,
+    each patch is embedded, and a transformer encoder processes the sequence.
+    """
+    in_channels: int = 3
+    image_size: Sequence[int] = (32, 32)
+    patch_size: int = 8
+    d_model: int = 128
+    num_heads: int = 4
+    num_layers: int = 4
+    dim_feedforward: int = 256
+    dropout: float = 0.0
+    pool: Literal["mean", "cls"] = "mean"
+    augment: Sequence[str] = ()                # as in ConvConfig
+
+    @property
+    def flat_dim(self) -> int:
+        return int(self.in_channels) * int(self.image_size[0]) * int(self.image_size[1])
+
+    @property
+    def n_patches(self) -> int:
+        return (int(self.image_size[0]) // int(self.patch_size)) * (int(self.image_size[1]) // int(self.patch_size))
+
+    def validate(self, mod_name: str = "?", input_dim: Optional[int] = None) -> None:
+        pre = f"Modality {mod_name!r}: vit"
+        size = tuple(int(v) for v in self.image_size)
+        if len(size) != 2 or any(v < 1 for v in size) or int(self.in_channels) < 1:
+            raise ValueError(f"{pre}.image_size must be (H, W) with positive entries and in_channels >= 1")
+        if int(self.patch_size) < 1 or any(v % int(self.patch_size) for v in size):
+            raise ValueError(f"{pre}.image_size {size} must be divisible by patch_size {self.patch_size}")
+        if int(self.d_model) % int(self.num_heads):
+            raise ValueError(f"{pre}.d_model ({self.d_model}) must be divisible by num_heads ({self.num_heads})")
+        if int(self.num_layers) < 1 or self.pool not in ("mean", "cls") or not 0.0 <= float(self.dropout) < 1.0:
+            raise ValueError(f"{pre}: num_layers >= 1, pool in ('mean', 'cls') and 0 <= dropout < 1 are required")
+        if input_dim is not None and int(input_dim) != self.flat_dim:
+            raise ValueError(f"Modality {mod_name!r}: input_dim={input_dim} must equal in_channels * H * W "
+                             f"= {self.flat_dim}")
+        _validate_augment(pre, self.augment, size)
+
+
+@dataclass
+class GraphConfig:
+    """Graph (GraphSAGE-style) encoder settings.
+
+    Each cell is encoded from its own features and the mean (or max) of its
+    ``k`` nearest neighbours *within the batch*, repeated for ``len(hidden)``
+    rounds. Neighbours come from the coordinates the batch carries under
+    ``UniVIConfig.spatial_key``; a batch without coordinates falls back to each
+    cell being its own neighbour. Use spatially local batches
+    (``univii.spatial.make_spatial_loader`` / ``encode_spatial``) at training
+    and at inference, so that a cell's in-batch neighbours are its real ones.
+    """
+    k: int = 6
+    hidden: Sequence[int] = (256, 128)
+    aggregate: Literal["mean", "max"] = "mean"
+    dropout: float = 0.0
+
+    def validate(self, mod_name: str = "?") -> None:
+        pre = f"Modality {mod_name!r}: graph"
+        if int(self.k) < 1 or not list(self.hidden) or any(int(h) < 1 for h in self.hidden):
+            raise ValueError(f"{pre}: k >= 1 and a non-empty list of positive hidden sizes are required")
+        if self.aggregate not in ("mean", "max") or not 0.0 <= float(self.dropout) < 1.0:
+            raise ValueError(f"{pre}: aggregate in ('mean', 'max') and 0 <= dropout < 1 are required")
 
 
 @dataclass
@@ -222,12 +305,19 @@ class ModalityConfig:
     # decoder_kwargs={"dispersion":"gene-cell", "min_scale":1e-4}
     decoder_kwargs: Optional[Dict[str, Any]] = None
 
-    # "mlp" (default: chosen by likelihood), "conv", or a name added with register_decoder
+    # "mlp" (default: chosen by likelihood), "linear" (one linear map from the latent, for any
+    # likelihood; read the loadings with model.decoder_loadings), "conv", or a registered name
     decoder_type: str = "mlp"
     # settings for encoder_type="conv" and/or decoder_type="conv"
     conv: Optional[ConvConfig] = None
     # free-form settings passed to registered (custom) encoder builders
     encoder_kwargs: Optional[Dict[str, Any]] = None
+    # settings for encoder_type="vit" and encoder_type="graph"
+    vit: Optional[ViTConfig] = None
+    graph: Optional[GraphConfig] = None
+    # Fraction of this modality's input features zeroed at random before encoding, at training time
+    # only. The reconstruction target stays complete, so the model learns to fill features in.
+    input_dropout: float = 0.0
 
 
 @dataclass
@@ -326,6 +416,54 @@ class UniVIConfig:
     hierarchy_head: Optional[str] = None
 
     # ------------------------------------------------------------------
+    # Prior over the latent (see univii.priors)
+    # ------------------------------------------------------------------
+    # "standard": N(0, I) (wrapped normal at the origin in a hyperbolic block), the original model.
+    # "mog": a learned mixture of `prior_components` components, which lets the latent form clusters.
+    # It covers every block of the latent: in a hyperbolic block each component is a wrapped normal
+    # at a learned point, so the prototypes are learned in hyperbolic space. With `prior_label_head`, a cell whose
+    # label is known is tied to the component with that index (labels in a dict `y`), so components
+    # become classes. With `prior_tree_weight > 0` and a registered hierarchy (model.set_hierarchy),
+    # distances between component means are pulled toward the label-tree distances.
+    prior: Literal["standard", "mog"] = "standard"
+    prior_components: int = 16
+    prior_label_head: Optional[str] = None
+    prior_tree_weight: float = 0.0
+
+    # Contrastive (InfoNCE) alignment between modalities: each cell's posterior mean in one modality
+    # should be closer to its own mean in another modality than to any other cell's in the batch.
+    # Uses the latent geometry's distance. Adds to, and does not replace, `gamma`.
+    contrastive_weight: float = 0.0
+    contrastive_temperature: float = 1.0
+
+    # Cohort alignment for atlases and mosaics (see univii.atlas). With weight > 0, the fused latent
+    # means of each cohort are pulled toward those of the other cohorts with a kernel two-sample
+    # (MMD) penalty. Cohort codes are read from `y[cohort_head]`. Because a batch usually holds one
+    # cohort, the model keeps the last `cohort_memory` latent means of every cohort (detached) and
+    # compares against those. Applied at training time only.
+    cohort_mmd_weight: float = 0.0
+    cohort_head: str = "cohort"
+    cohort_memory: int = 1024
+    # Cohort-conditioned decoders: with n_cohorts > 0 every decoder also receives a learned
+    # embedding of the cell's cohort (code in `y[cohort_head]`), so technical differences between
+    # cohorts need not be stored in the latent. Combine with cohort_mmd_weight, which then no longer
+    # works against reconstruction. Outside training, decoders use cohort 0 unless
+    # model.set_decode_cohort(code) says otherwise.
+    n_cohorts: int = 0
+    cohort_embedding_dim: int = 8
+    # Per-cohort learned shift added to each modality's encoder input. All shifts start at zero and
+    # are only trained by univii.atlas.adapt_to_cohort, for a cohort added with model.add_cohort();
+    # that function switches this on.
+    cohort_input_shift: bool = False
+
+    # Cycle consistency: predict every other modality from a modality's latent mean, encode the
+    # prediction with that modality's own encoder, and penalise the distance back to the starting
+    # latent. It also runs for modalities missing from the batch, which is what makes it useful for
+    # single-modality cohorts. Applied to target modalities with a Gaussian-type likelihood, where
+    # the decoder's mean is in the same space as the encoder's input.
+    cycle_weight: float = 0.0
+
+    # ------------------------------------------------------------------
     # Spatial smoothness prior (see univii.spatial)
     # ------------------------------------------------------------------
     # Active when spatial_weight > 0 and the batch carries coordinates under `spatial_key`
@@ -357,6 +495,26 @@ class UniVIConfig:
                 raise ValueError(f"{_name} must be >= 0, got {getattr(self, _name)}")
         if self.hierarchy_scale is not None and not float(self.hierarchy_scale) > 0.0:
             raise ValueError(f"hierarchy_scale must be > 0 or None, got {self.hierarchy_scale}")
+
+        if self.prior not in ("standard", "mog"):
+            raise ValueError(f"prior must be 'standard' or 'mog', got {self.prior!r}")
+        if self.prior == "mog":
+            if int(self.prior_components) < 1:
+                raise ValueError(f"prior_components must be >= 1, got {self.prior_components}")
+        elif self.prior_label_head is not None or float(self.prior_tree_weight) != 0.0:
+            raise ValueError("prior_label_head and prior_tree_weight require prior='mog'")
+        if float(self.prior_tree_weight) < 0.0 or float(self.contrastive_weight) < 0.0:
+            raise ValueError("prior_tree_weight and contrastive_weight must be >= 0")
+        if float(self.cohort_mmd_weight) < 0.0 or int(self.cohort_memory) < 1:
+            raise ValueError("cohort_mmd_weight must be >= 0 and cohort_memory >= 1")
+        if int(self.n_cohorts) < 0 or int(self.cohort_embedding_dim) < 1:
+            raise ValueError("n_cohorts must be >= 0 and cohort_embedding_dim >= 1")
+        if bool(self.cohort_input_shift) and int(self.n_cohorts) < 1:
+            raise ValueError("cohort_input_shift requires n_cohorts >= 1")
+        if float(self.cycle_weight) < 0.0:
+            raise ValueError(f"cycle_weight must be >= 0, got {self.cycle_weight}")
+        if not float(self.contrastive_temperature) > 0.0:
+            raise ValueError(f"contrastive_temperature must be > 0, got {self.contrastive_temperature}")
 
         if float(self.spatial_weight) < 0.0:
             raise ValueError(f"spatial_weight must be >= 0, got {self.spatial_weight}")
@@ -442,21 +600,32 @@ class UniVIConfig:
             enc_type = (m.encoder_type or "mlp").lower().strip()
             from .models.registry import DECODER_BUILDERS, ENCODER_BUILDERS
             from .models import conv as _conv_builtin  # noqa: F401  (registers the built-in "conv" builders)
+            from .models import vision as _vit_builtin, graph as _graph_builtin  # noqa: F401
             if enc_type not in ("mlp", "transformer") and enc_type not in ENCODER_BUILDERS:
                 raise ValueError(
                     f"Modality {m.name!r}: unknown encoder_type {m.encoder_type!r}. Built in: 'mlp', "
                     f"'transformer'; registered: {sorted(ENCODER_BUILDERS)}"
                 )
             dec_type = (getattr(m, "decoder_type", "mlp") or "mlp").lower().strip()
-            if dec_type != "mlp" and dec_type not in DECODER_BUILDERS:
+            if dec_type not in ("mlp", "linear") and dec_type not in DECODER_BUILDERS:
                 raise ValueError(
-                    f"Modality {m.name!r}: unknown decoder_type {m.decoder_type!r}. Built in: 'mlp'; "
+                    f"Modality {m.name!r}: unknown decoder_type {m.decoder_type!r}. Built in: 'mlp', 'linear'; "
                     f"registered: {sorted(DECODER_BUILDERS)}"
                 )
             if "conv" in (enc_type, dec_type):
                 if m.conv is None:
                     raise ValueError(f"Modality {m.name!r}: encoder_type/decoder_type 'conv' requires conv=ConvConfig(...)")
                 m.conv.validate(m.name, int(m.input_dim))
+            if enc_type == "vit":
+                if m.vit is None:
+                    raise ValueError(f"Modality {m.name!r}: encoder_type='vit' requires vit=ViTConfig(...)")
+                m.vit.validate(m.name, int(m.input_dim))
+            if enc_type == "graph":
+                if m.graph is None:
+                    raise ValueError(f"Modality {m.name!r}: encoder_type='graph' requires graph=GraphConfig(...)")
+                m.graph.validate(m.name)
+            if not 0.0 <= float(getattr(m, "input_dropout", 0.0)) < 1.0:
+                raise ValueError(f"Modality {m.name!r}: input_dropout must be in [0, 1), got {m.input_dropout}")
 
             if enc_type == "transformer":
                 if m.transformer is None:

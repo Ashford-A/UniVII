@@ -12,7 +12,7 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader
 
-from .config import (ClassHeadConfig, ConvConfig, ModalityConfig, UniVIConfig,
+from .config import (ClassHeadConfig, ConvConfig, GraphConfig, ModalityConfig, UniVIConfig, ViTConfig,
                      TransformerConfig, TokenizerConfig)
 from .data import MultiModalDataset, collate_multimodal_xy_recon
 from .evaluation import encode_adata
@@ -160,7 +160,7 @@ def load_reference(directory, *, device="cpu", load_preprocessors=True):
     for item in config["modalities"]:
         item = dict(item)
         for key, cls in (("transformer", TransformerConfig), ("tokenizer", TokenizerConfig),
-                         ("conv", ConvConfig)):
+                         ("conv", ConvConfig), ("vit", ViTConfig), ("graph", GraphConfig)):
             if item.get(key) is not None:
                 item[key] = cls(**item[key])
         modalities.append(ModalityConfig(**item))

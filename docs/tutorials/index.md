@@ -10,6 +10,7 @@ Each tutorial is a Jupyter notebook that downloads its data, trains a model, and
 | [Cell-type heads and refinement](supervised_heads.ipynb) | attach a classifier to a trained reference, refine with 20% of labels, predict from one modality | 10x Multiome PBMC |
 | [Imputation, denoising, generation](generation.ipynb) | denoise, evaluate prediction per feature, generate cells from the prior or a cell type, run an in-silico perturbation | 10x Multiome PBMC |
 | [Custom modalities and likelihoods](custom_modalities.ipynb) | combine three modalities, use count and beta-binomial likelihoods, learn per-cell modality gates, try a transformer encoder | synthetic |
+| [The experiment toolkit](toolkit.ipynb) | learn a hyperbolic space with class prototypes, recover a tree and pseudotime, segment cells with a hidden Markov model, build a mosaic atlas, add a cohort to it, compare configurations, normalise stains | simulated in the notebook |
 
 The quickstart is the best starting point; the others can be read in any order.
 
@@ -39,5 +40,6 @@ query_mapping
 supervised_heads
 generation
 custom_modalities
+toolkit
 experimental/index
 ```

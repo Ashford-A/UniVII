@@ -102,7 +102,11 @@ class ConvGaussianEncoder(nn.Module):
 
     def features(self, x: torch.Tensor) -> torch.Tensor:
         """Pooled feature vector before the latent head, ``(B, feature_dim)``."""
-        h = self.features_net(_as_grid(x, self.cfg))
+        grid = _as_grid(x, self.cfg)
+        if self.training and self.cfg.augment:
+            from .vision import augment_images
+            grid = augment_images(grid, self.cfg.augment)
+        h = self.features_net(grid)
         return h.flatten(2).mean(-1) if self.cfg.pool == "mean" else h.flatten(1)
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:

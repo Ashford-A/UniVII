@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from typing import Dict, Tuple, Optional, Any, List, Union, Mapping, Callable, overload, Literal
+import dataclasses
 import math
 import warnings
 
@@ -178,6 +179,26 @@ class UniVIMultiModalVAE(nn.Module):
         self.encoders = nn.ModuleDict()
         self.encoder_heads = nn.ModuleDict()
         self.decoders = nn.ModuleDict()
+        n_cohorts = int(getattr(cfg, "n_cohorts", 0))
+        cond_dim = int(cfg.cohort_embedding_dim) if n_cohorts > 0 else 0
+        dec_latent_dim = self.latent_dim + cond_dim
+        self._cond_dim = cond_dim
+        self._decode_cohort: Optional[int] = None
+        self._cohort_ctx = None
+        self._skip_input_shift: set = set()        # modalities whose shift the caller has already applied
+        self.input_shifts = nn.ModuleDict()
+        if n_cohorts > 0 and bool(getattr(cfg, "cohort_input_shift", False)):
+            for mc in cfg.modalities:
+                shift = nn.Embedding(n_cohorts, int(mc.input_dim))
+                nn.init.zeros_(shift.weight)
+                self.input_shifts[mc.name] = shift
+        if float(getattr(cfg, "cohort_mmd_weight", 0.0)) > 0.0 and bool(getattr(cfg, "encoder_batchnorm", False)):
+            import warnings
+            warnings.warn(
+                "cohort_mmd_weight > 0 with encoder_batchnorm=True: when each training batch holds a single "
+                "cohort, batch normalisation removes cohort differences during training but not at evaluation, "
+                "so cohorts that look aligned in training separate again afterwards. Set encoder_batchnorm=False "
+                "(as univii.presets.atlas_config does), or make sure every batch mixes cohorts.", stacklevel=2)
 
         for m in cfg.modalities:
             if not isinstance(m, ModalityConfig):
@@ -219,22 +240,28 @@ class UniVIMultiModalVAE(nn.Module):
                 decoder_kwargs = {}
 
             dec_type = (getattr(m, "decoder_type", "mlp") or "mlp").lower().strip()
-            if dec_type != "mlp":
+            if dec_type == "linear":
+                # One linear map from the latent to the likelihood's parameters: interpretable loadings.
+                dec_cfg = DecoderConfig(output_dim=int(m.input_dim), hidden_dims=[], dropout=0.0, batchnorm=False)
+            if dec_type not in ("mlp", "linear"):
                 # plug-in decoders (built-in "conv" or anything added with register_decoder)
                 from . import conv as _conv_builtin  # noqa: F401
                 from .registry import DECODER_BUILDERS, available_decoders
                 if dec_type not in DECODER_BUILDERS:
                     raise ValueError(f"Modality {m.name!r}: unknown decoder_type {dec_type!r}. "
                                      f"Available: {available_decoders()}")
-                self.decoders[m.name] = DECODER_BUILDERS[dec_type](cfg, m, lk)
-                continue
-
-            self.decoders[m.name] = build_decoder(
-                lk,
-                cfg=dec_cfg,
-                latent_dim=self.latent_dim,
-                **decoder_kwargs,
-            )
+                dec_uni_cfg = dataclasses.replace(cfg, latent_dim=dec_latent_dim) if cond_dim else cfg
+                self.decoders[m.name] = DECODER_BUILDERS[dec_type](dec_uni_cfg, m, lk)
+            else:
+                self.decoders[m.name] = build_decoder(
+                    lk,
+                    cfg=dec_cfg,
+                    latent_dim=dec_latent_dim,
+                    **decoder_kwargs,
+                )
+            if cond_dim:
+                from .conditioning import CohortConditionedDecoder
+                self.decoders[m.name] = CohortConditionedDecoder(self.decoders[m.name], n_cohorts, cond_dim)
 
         self.register_buffer("prior_mu", torch.zeros(self.latent_dim))
         self.register_buffer("prior_logvar", torch.zeros(self.latent_dim))
@@ -242,6 +269,12 @@ class UniVIMultiModalVAE(nn.Module):
         # Latent geometry. Euclidean (the default) leaves every code path below unchanged.
         self.latent = LatentGeometry.from_config(cfg)
         self._kl_prior_parts: List[Tuple[torch.Tensor, torch.Tensor]] = []
+        self._prior_labels: Optional[torch.Tensor] = None
+        self.mixture_prior: Optional[nn.Module] = None
+        if getattr(cfg, "prior", "standard") == "mog":
+            from ..priors import MixturePrior
+            self.mixture_prior = MixturePrior(int(cfg.prior_components), self.latent.euclidean_dim,
+                                              self.latent.hyperbolic_dim)
 
         self.fused_encoder_type = (getattr(cfg, "fused_encoder_type", "moe") or "moe").lower().strip()
         self.fused_require_all = bool(getattr(cfg, "fused_require_all_modalities", True))
@@ -570,6 +603,8 @@ class UniVIMultiModalVAE(nn.Module):
         the hyperbolic block uses wrapped normals and a one-sample estimate.
         ``is_prior=True`` marks KL-to-prior terms so their Euclidean and hyperbolic
         parts can be logged and the hyperbolic part weighted."""
+        if is_prior and self.mixture_prior is not None:
+            return self._mixture_prior_kl(mu_q, logvar_q)
         if not self.latent.is_euclidean:
             kl_e, kl_h = self.latent.kl(mu_q, logvar_q, mu_p, logvar_p)
             if is_prior:
@@ -580,6 +615,150 @@ class UniVIMultiModalVAE(nn.Module):
         var_p = torch.exp(logvar_p)
         kl = logvar_p - logvar_q + (var_q + (mu_q - mu_p) ** 2) / var_p - 1.0
         return 0.5 * kl.sum(dim=-1)
+
+    def _head_labels(self, cfg_field: str, y: Optional["YType"]) -> Optional[torch.Tensor]:
+        """Labels for the head named by ``cfg.<cfg_field>``, taken from a dict ``y``; else None."""
+        head = getattr(self.cfg, cfg_field, None)
+        if head is None or y is None or not isinstance(y, Mapping):
+            return None
+        return y.get(head, None)
+
+    def _mixture_component_log_prob(self, z_e: torch.Tensor, t_h: Optional[torch.Tensor]) -> torch.Tensor:
+        """``log p_k(z)`` for every mixture component, ``(B, K)``: Gaussian in the Euclidean block
+        times a wrapped normal at the component's centre in the hyperbolic block."""
+        prior = self.mixture_prior
+        comp = prior.component_log_prob(z_e)
+        if self.latent.hyperbolic_dim:
+            d_e = self.latent.euclidean_dim
+            centres = self.latent.constrain(prior.means)[:, d_e:]
+            parts = [self.latent._h_log_prob(t_h, centres[k].expand_as(t_h), prior.logvars[k, d_e:].expand_as(t_h))
+                     for k in range(prior.n_components)]
+            comp = comp + torch.stack(parts, dim=1).to(comp.dtype)
+        return comp
+
+    def _mixture_prior_kl(self, mu_q: torch.Tensor, logvar_q: torch.Tensor) -> torch.Tensor:
+        """KL to the learned mixture prior over the whole latent (one-sample estimate)."""
+        d_e = self.latent.euclidean_dim
+        mu_q = self.latent.constrain(mu_q)
+        e_mu, e_lv = mu_q[:, :d_e], logvar_q[:, :d_e]
+        z_e = e_mu + torch.randn_like(e_mu) * torch.exp(0.5 * e_lv)
+        log_q = (-0.5 * ((z_e - e_mu) ** 2 / e_lv.exp() + e_lv + math.log(2.0 * math.pi))).sum(-1)
+        t_h = None
+        if self.latent.hyperbolic_dim:
+            t_h, log_q_h = self.latent._h_rsample(mu_q[:, d_e:], logvar_q[:, d_e:])
+            log_q = log_q + log_q_h.to(log_q.dtype)
+        kl = log_q - self.mixture_prior.mix(self._mixture_component_log_prob(z_e, t_h), self._prior_labels)
+        self._kl_prior_parts.append((kl, torch.zeros_like(kl)))
+        return kl
+
+    def _cycle_term(self, mu_dict: Mapping[str, torch.Tensor]) -> Optional[torch.Tensor]:
+        """Per-cell cycle-consistency penalty, or None when inactive.
+
+        For every present modality ``a`` and every other modality ``b`` with a Gaussian-type
+        likelihood: decode ``b`` from the latent mean of ``a``, encode the prediction with the
+        encoder of ``b``, and measure the squared latent distance back to the (detached) mean of
+        ``a``. Encoder batch-norm statistics are not updated by these predicted inputs."""
+        if float(getattr(self.cfg, "cycle_weight", 0.0)) <= 0.0:
+            return None
+        gaussian = ("gaussian", "normal", "mse", "gaussian_diag")
+        terms = []
+        for a, mu_a in mu_dict.items():
+            if a.startswith("__"):
+                continue
+            for b in self.modality_names:
+                if b == a or (self.mod_cfg_by_name[b].likelihood or "gaussian").lower() not in gaussian:
+                    continue
+                out = self.decoders[b](mu_a)
+                x_hat = out if torch.is_tensor(out) else (out.get("mean", out.get("mu")) if isinstance(out, Mapping) else None)
+                if x_hat is None:
+                    continue
+                bns = [m for m in self.encoders[b].modules() if isinstance(m, nn.modules.batchnorm._BatchNorm)]
+                saved = [m.momentum for m in bns]
+                for m in bns:
+                    m.momentum = 0.0
+                try:
+                    mu_back = self.encode_modalities({b: x_hat})[0][b]
+                finally:
+                    for m, mom in zip(bns, saved):
+                        m.momentum = mom
+                terms.append(self._latent_sqdist(self.latent.constrain(mu_back), mu_a.detach()))
+        return torch.stack(terms, dim=0).mean(dim=0) if terms else None
+
+    def _contrastive_term(self, mu_dict: Mapping[str, torch.Tensor]) -> Optional[torch.Tensor]:
+        """Per-cell symmetric InfoNCE between every pair of present modalities, or None when inactive."""
+        if float(getattr(self.cfg, "contrastive_weight", 0.0)) <= 0.0:
+            return None
+        names = [k for k in mu_dict if not k.startswith("__")]
+        if len(names) < 2 or mu_dict[names[0]].shape[0] < 2:
+            return None
+        tau = float(self.cfg.contrastive_temperature)
+        target = torch.arange(mu_dict[names[0]].shape[0], device=mu_dict[names[0]].device)
+        terms = []
+        for i in range(len(names)):
+            for j in range(i + 1, len(names)):
+                a, b = mu_dict[names[i]], mu_dict[names[j]]
+                logits = -self._latent_sqdist(a.unsqueeze(1), b.unsqueeze(0)) / tau
+                terms.append(0.5 * (F.cross_entropy(logits, target, reduction="none")
+                                    + F.cross_entropy(logits.t(), target, reduction="none")))
+        return torch.stack(terms, dim=0).mean(dim=0)
+
+    def _mmd(self, a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+        """Kernel two-sample statistic between two sets of latent points.
+
+        Gaussian kernels at six widths, from 1/16 of the median cross distance to twice it, so
+        that both a global shift and a small offset inside tight clusters are seen."""
+        d_ab = self._latent_sqdist(a.unsqueeze(1), b.unsqueeze(0))
+        d_aa = self._latent_sqdist(a.unsqueeze(1), a.unsqueeze(0))
+        d_bb = self._latent_sqdist(b.unsqueeze(1), b.unsqueeze(0))
+        base = d_ab.detach().median().clamp_min(1e-6)
+        total = 0.0
+        scales = (1.0 / 256, 1.0 / 64, 1.0 / 16, 0.25, 1.0, 4.0)        # on squared distance
+        for scale in scales:
+            w = 2.0 * scale * base
+            total = total + torch.exp(-d_aa / w).mean() + torch.exp(-d_bb / w).mean() - 2.0 * torch.exp(-d_ab / w).mean()
+        return total / len(scales)
+
+    def reset_cohort_memory(self) -> None:
+        """Forget the stored latent means used by the cohort alignment term."""
+        self._cohort_bank = {}
+
+    def _cohort_term(self, mu: torch.Tensor, y: Optional["YType"]) -> Optional[torch.Tensor]:
+        """Scalar MMD between each cohort in the batch and the other cohorts (in the batch and in
+        memory), or None when inactive. Updates the memory."""
+        if float(getattr(self.cfg, "cohort_mmd_weight", 0.0)) <= 0.0 or not self.training:
+            return None
+        labels = self._head_labels("cohort_head", y)
+        if labels is None:
+            return None
+        labels = torch.as_tensor(labels).long().view(-1).to(mu.device)
+        bank = getattr(self, "_cohort_bank", None)
+        if bank is None:
+            bank = self._cohort_bank = {}
+        present = [int(c) for c in labels.unique().tolist() if c >= 0]
+        terms = []
+        for c in present:
+            cur = mu[labels == c]
+            others = [mu[labels == o] for o in present if o != c]
+            others += [v.to(device=mu.device, dtype=mu.dtype) for k, v in bank.items() if k != c]
+            others = [o for o in others if o.shape[0] > 0]
+            if cur.shape[0] >= 2 and others and sum(o.shape[0] for o in others) >= 2:
+                terms.append(self._mmd(cur, torch.cat(others, dim=0)))
+        size = int(self.cfg.cohort_memory)
+        for c in present:
+            new = mu[labels == c].detach()
+            old = bank.get(c)
+            bank[c] = (new if old is None else torch.cat([new, old.to(new.device)], dim=0))[:size]
+        return torch.stack(terms).mean() if terms else None
+
+    def _prior_tree_term(self) -> Optional[torch.Tensor]:
+        """Scalar penalty arranging mixture-prior means like the registered label tree, or None."""
+        if self.mixture_prior is None or float(getattr(self.cfg, "prior_tree_weight", 0.0)) <= 0.0:
+            return None
+        if not self.latent.has_hierarchy:
+            return None
+        return self.mixture_prior.tree_penalty(
+            self.latent.hierarchy_dist, self.latent.hierarchy_scale,
+            pairwise=lambda centres: self.latent.cdist(self.latent.constrain(centres), self.latent.constrain(centres)))
 
     def _latent_sqdist(self, a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
         """Squared latent distance per cell (squared L2 when the latent space is Euclidean)."""
@@ -878,6 +1057,11 @@ class UniVIMultiModalVAE(nn.Module):
 
             x_in = self._encode_categorical_input_if_needed(m, x_dict[m])
             enc = self.encoders[m]
+            if m in self.input_shifts and x_in.ndim == 2 and m not in self._skip_input_shift:
+                x_in = x_in + self.input_shifts[m](self._cohort_index(x_in.shape[0], x_in.device)).to(x_in.dtype)
+            in_drop = float(getattr(self.mod_cfg_by_name[m], "input_dropout", 0.0))
+            if in_drop > 0.0 and self.training:
+                x_in = x_in * (torch.rand_like(x_in) >= in_drop).to(x_in.dtype)
 
             tokens = key_padding_mask = attn_bias = None
             if attn_bias_cfg is not None and isinstance(attn_bias_cfg, Mapping):
@@ -894,10 +1078,13 @@ class UniVIMultiModalVAE(nn.Module):
                 )
                 mu, logvar = torch.chunk(h, 2, dim=-1)
             else:
-                try:
-                    mu, logvar = enc(x_in, attn_bias=attn_bias)
-                except TypeError:
-                    mu, logvar = enc(x_in)
+                if getattr(enc, "uses_coords", False):
+                    mu, logvar = enc(x_in, coords=x_dict.get(self.cfg.spatial_key, None))
+                else:
+                    try:
+                        mu, logvar = enc(x_in, attn_bias=attn_bias)
+                    except TypeError:
+                        mu, logvar = enc(x_in)
 
             mu = self.latent.constrain(self.encoder_heads[m](mu))
             logvar = torch.clamp(logvar, self.LOGVAR_MIN, self.LOGVAR_MAX)
@@ -1185,7 +1372,96 @@ class UniVIMultiModalVAE(nn.Module):
 
     # ------------------------------ forward dispatcher ------------------------------
 
+    def _set_cohort_context(self, codes) -> None:
+        self._cohort_ctx = codes
+        for dec in self.decoders.values():
+            if hasattr(dec, "embed") and hasattr(dec, "codes"):
+                dec.codes = codes
+
+    def _cohort_index(self, n: int, device) -> torch.Tensor:
+        """Cohort code per row from the current context (missing or invalid codes -> cohort 0)."""
+        k, codes = int(self.cfg.n_cohorts), self._cohort_ctx
+        if codes is None or isinstance(codes, int):
+            return torch.full((n,), 0 if codes is None else int(codes), dtype=torch.long, device=device)
+        idx = torch.as_tensor(codes).long().view(-1).to(device)
+        if idx.shape[0] != n:
+            raise ValueError(f"got {idx.shape[0]} cohort codes for {n} cells")
+        return torch.where((idx >= 0) & (idx < k), idx, torch.zeros_like(idx))
+
+    def set_cohort(self, cohort: Optional[int]) -> None:
+        """Choose the cohort the model assumes outside a training pass.
+
+        Only relevant with ``UniVIConfig(n_cohorts > 0)``. Decoders then express
+        predictions "as if measured in" that cohort, and encoders apply that
+        cohort's input shift, if it has one (see ``univii.atlas.adapt_to_cohort``).
+        ``None`` restores the default, cohort 0. For a modality that only some
+        cohorts measured, pick one of those.
+        """
+        if cohort is not None and not 0 <= int(cohort) < max(int(self.cfg.n_cohorts), 1):
+            raise ValueError(f"cohort code {cohort} is outside 0..{int(self.cfg.n_cohorts) - 1}")
+        self._decode_cohort = None if cohort is None else int(cohort)
+        self._set_cohort_context(self._decode_cohort)
+
+    set_decode_cohort = set_cohort
+
+    def add_cohort(self) -> int:
+        """Make room for one more cohort and return its code.
+
+        Each decoder's cohort embedding gains a row (started at the average of
+        the existing rows) and each modality gains an input shift for the new
+        cohort (started at zero), so the model's behaviour for existing cohorts
+        is unchanged. Train the new rows with ``univii.atlas.adapt_to_cohort``.
+        Requires ``UniVIConfig(n_cohorts >= 1)``. Parameters are replaced, so
+        create optimizers afterwards.
+        """
+        k = int(self.cfg.n_cohorts)
+        if k < 1:
+            raise ValueError("add_cohort needs a model built with n_cohorts >= 1")
+
+        def grown(old: nn.Embedding, new_row: torch.Tensor) -> nn.Embedding:
+            new = nn.Embedding(k + 1, old.embedding_dim).to(device=old.weight.device, dtype=old.weight.dtype)
+            with torch.no_grad():
+                new.weight[:k] = old.weight
+                new.weight[k] = new_row
+            return new
+
+        for dec in self.decoders.values():
+            if hasattr(dec, "embed"):
+                dec.embed = grown(dec.embed, dec.embed.weight.detach().mean(0))
+        device = next(self.parameters()).device
+        for mc in self.cfg.modalities:
+            if mc.name in self.input_shifts:
+                old = self.input_shifts[mc.name]
+                self.input_shifts[mc.name] = grown(old, torch.zeros(old.embedding_dim))
+            else:
+                shift = nn.Embedding(k + 1, int(mc.input_dim)).to(device)
+                nn.init.zeros_(shift.weight)
+                self.input_shifts[mc.name] = shift
+        self.cfg.n_cohorts = k + 1
+        self.cfg.cohort_input_shift = True
+        return k
+
     def forward(
+        self,
+        x_dict: Dict[str, torch.Tensor],
+        epoch: int = 0,
+        y: Optional[YType] = None,
+        attn_bias_cfg: Optional[Mapping[str, Any]] = None,
+        recon_targets: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, torch.Tensor]:
+        if not self._cond_dim:
+            return self._forward_dispatch(x_dict, epoch=epoch, y=y, attn_bias_cfg=attn_bias_cfg,
+                                          recon_targets=recon_targets, **kwargs)
+        labels = self._head_labels("cohort_head", y)
+        self._set_cohort_context(labels if labels is not None else self._decode_cohort)
+        try:
+            return self._forward_dispatch(x_dict, epoch=epoch, y=y, attn_bias_cfg=attn_bias_cfg,
+                                          recon_targets=recon_targets, **kwargs)
+        finally:
+            self._set_cohort_context(self._decode_cohort)
+
+    def _forward_dispatch(
         self,
         x_dict: Dict[str, torch.Tensor],
         epoch: int = 0,
@@ -1224,6 +1500,7 @@ class UniVIMultiModalVAE(nn.Module):
         recon_targets: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, torch.Tensor]:
         self._kl_prior_parts = []
+        self._prior_labels = self._head_labels("prior_label_head", y)
         mu_dict, logvar_dict = self.encode_modalities(x_dict, attn_bias_cfg=attn_bias_cfg)
         if len(mu_dict) == 0:
             raise ValueError("At least one modality must be present in x_dict.")
@@ -1349,6 +1626,30 @@ class UniVIMultiModalVAE(nn.Module):
             loss = loss + w_spat * spat
             loss_annealed = loss_annealed + w_spat * spat
             loss_fixed = loss_fixed + w_spat * spat
+        cont = self._contrastive_term(mu_dict)
+        if cont is not None:
+            w_cont = float(self.cfg.contrastive_weight)
+            loss = loss + w_cont * cont
+            loss_annealed = loss_annealed + w_cont * cont
+            loss_fixed = loss_fixed + w_cont * cont
+        ptree = self._prior_tree_term()
+        if ptree is not None:
+            w_ptree = float(self.cfg.prior_tree_weight)
+            loss = loss + w_ptree * ptree
+            loss_annealed = loss_annealed + w_ptree * ptree
+            loss_fixed = loss_fixed + w_ptree * ptree
+        cyc = self._cycle_term(mu_dict)
+        if cyc is not None:
+            w_cyc = float(self.cfg.cycle_weight)
+            loss = loss + w_cyc * cyc
+            loss_annealed = loss_annealed + w_cyc * cyc
+            loss_fixed = loss_fixed + w_cyc * cyc
+        coh = self._cohort_term(mu_z, y)
+        if coh is not None:
+            w_coh = float(self.cfg.cohort_mmd_weight)
+            loss = loss + w_coh * coh
+            loss_annealed = loss_annealed + w_coh * coh
+            loss_fixed = loss_fixed + w_coh * coh
         kl_e_log, kl_h_log = self._kl_parts_for_logging(kl)
 
         out: Dict[str, Any] = {
@@ -1378,6 +1679,14 @@ class UniVIMultiModalVAE(nn.Module):
             out["hierarchy"] = hier.mean()
         if spat is not None:
             out["spatial"] = spat.mean()
+        if cont is not None:
+            out["contrastive"] = cont.mean()
+        if ptree is not None:
+            out["prior_tree"] = ptree
+        if coh is not None:
+            out["cohort_mmd"] = coh
+        if cyc is not None:
+            out["cycle"] = cyc.mean()
         if class_loss is not None:
             out["class_loss"] = class_loss.mean()
         if class_logits is not None:
@@ -1399,6 +1708,7 @@ class UniVIMultiModalVAE(nn.Module):
         recon_targets: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, torch.Tensor]:
         self._kl_prior_parts = []
+        self._prior_labels = self._head_labels("prior_label_head", y)
         mu_dict, logvar_dict = self.encode_modalities(x_dict, attn_bias_cfg=attn_bias_cfg)
         if len(mu_dict) == 0:
             raise ValueError("At least one modality must be present in x_dict.")
@@ -1593,6 +1903,30 @@ class UniVIMultiModalVAE(nn.Module):
             loss = loss + w_spat * spat
             loss_annealed = loss_annealed + w_spat * spat
             loss_fixed = loss_fixed + w_spat * spat
+        cont = self._contrastive_term(mu_dict)
+        if cont is not None:
+            w_cont = float(self.cfg.contrastive_weight)
+            loss = loss + w_cont * cont
+            loss_annealed = loss_annealed + w_cont * cont
+            loss_fixed = loss_fixed + w_cont * cont
+        ptree = self._prior_tree_term()
+        if ptree is not None:
+            w_ptree = float(self.cfg.prior_tree_weight)
+            loss = loss + w_ptree * ptree
+            loss_annealed = loss_annealed + w_ptree * ptree
+            loss_fixed = loss_fixed + w_ptree * ptree
+        cyc = self._cycle_term(mu_dict)
+        if cyc is not None:
+            w_cyc = float(self.cfg.cycle_weight)
+            loss = loss + w_cyc * cyc
+            loss_annealed = loss_annealed + w_cyc * cyc
+            loss_fixed = loss_fixed + w_cyc * cyc
+        coh = self._cohort_term(mu_moe, y)
+        if coh is not None:
+            w_coh = float(self.cfg.cohort_mmd_weight)
+            loss = loss + w_coh * coh
+            loss_annealed = loss_annealed + w_coh * coh
+            loss_fixed = loss_fixed + w_coh * coh
         kl_e_log, kl_h_log = self._kl_parts_for_logging(kl)
 
         out: Dict[str, Any] = {
@@ -1624,6 +1958,14 @@ class UniVIMultiModalVAE(nn.Module):
             out["hierarchy"] = hier.mean()
         if spat is not None:
             out["spatial"] = spat.mean()
+        if cont is not None:
+            out["contrastive"] = cont.mean()
+        if ptree is not None:
+            out["prior_tree"] = ptree
+        if coh is not None:
+            out["cohort_mmd"] = coh
+        if cyc is not None:
+            out["cycle"] = cyc.mean()
         if class_loss is not None:
             out["class_loss"] = class_loss.mean()
         if class_logits is not None:
@@ -2030,6 +2372,40 @@ class UniVIMultiModalVAE(nn.Module):
         """
         self.latent.set_hierarchy(dist, root_index=root_index)
 
+    @torch.no_grad()
+    def prior_responsibilities(self, z: torch.Tensor) -> torch.Tensor:
+        """Probability of each mixture-prior component for latent coordinates ``z``: ``(cells, K)``.
+        Requires ``UniVIConfig(prior="mog")``. ``argmax`` over components gives a clustering."""
+        if self.mixture_prior is None:
+            raise ValueError("prior_responsibilities needs UniVIConfig(prior='mog')")
+        means = self.mixture_prior.means
+        z = self.latent.constrain(torch.as_tensor(z).to(device=means.device, dtype=means.dtype))
+        d_e = self.latent.euclidean_dim
+        comp = self._mixture_component_log_prob(z[:, :d_e], z[:, d_e:] if self.latent.hyperbolic_dim else None)
+        return F.softmax(comp + F.log_softmax(self.mixture_prior.logits, dim=0), dim=1)
+
+    def prior_centres(self) -> torch.Tensor:
+        """Learned centres of the mixture-prior components, ``(K, latent_dim)``, in the same
+        coordinates as the latent (anchored if an anchor is set)."""
+        if self.mixture_prior is None:
+            raise ValueError("prior_centres needs UniVIConfig(prior='mog')")
+        centres = self.latent.constrain(self.mixture_prior.means.detach())
+        return self.anchor_latent(centres) if self.latent.has_anchor else centres
+
+    def decoder_loadings(self, modality: str) -> torch.Tensor:
+        """Loadings of a ``decoder_type="linear"`` decoder: ``(features, latent_dim)``.
+
+        Entry ``[f, k]`` is how much latent dimension ``k`` moves feature ``f`` on the scale of the
+        likelihood's main parameter (the mean for Gaussian, the pre-activation rate for counts).
+        """
+        if (getattr(self.mod_cfg_by_name[modality], "decoder_type", "mlp") or "mlp").lower() != "linear":
+            raise ValueError(f"modality {modality!r} does not use decoder_type='linear'")
+        n_feat = int(self.mod_cfg_by_name[modality].input_dim)
+        for module in self.decoders[modality].modules():
+            if isinstance(module, nn.Linear) and module.in_features == self.latent_dim + self._cond_dim:
+                return module.weight.detach()[:n_feat, :self.latent_dim].clone()
+        raise RuntimeError(f"no linear map from the latent found in the {modality!r} decoder")
+
     def _anneal_weight(self, epoch: int, start: int, end: int, max_val: float) -> float:
         start = int(start)
         end = int(end)
@@ -2066,6 +2442,7 @@ class UniVIMultiModalVAE(nn.Module):
         Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]],
     ]:
         self._kl_prior_parts = []
+        self._prior_labels = self._head_labels("prior_label_head", y)
         mu_dict, logvar_dict = self.encode_modalities(x_dict, attn_bias_cfg=attn_bias_cfg)
         if len(mu_dict) == 0:
             raise ValueError("At least one modality must be present in x_dict.")

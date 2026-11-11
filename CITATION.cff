@@ -3,7 +3,7 @@ message: "If you use UniVII, please cite the Genome Research article below, and 
 type: software
 title: "UniVII"
 abstract: "UniVI, a mixture-of-experts multimodal variational autoencoder for integrating, translating, and generating single-cell multi-omics data, extended with hyperbolic and product latent spaces, convolutional encoders and decoders, spatial tools, and plug-in architectures."
-version: 0.1.0
+version: 0.2.0
 license: MIT
 repository-code: "https://github.com/Ashford-A/UniVII"
 url: "https://github.com/Ashford-A/UniVII"
