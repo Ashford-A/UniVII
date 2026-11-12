@@ -28,7 +28,8 @@ class GaussianHMM(nn.Module):
 
     ``stickiness`` sets the initial probability of staying in the same state;
     values near 1 favour long runs. All parameters are learned by :meth:`fit`.
-    Sequences are ``(T, dim)`` tensors; computations run in float64.
+    A sequence is ``(T,)`` or ``(T, dim)``; a batch of equal-length sequences is ``(B, T, dim)`` and is
+    processed together. Computations run in float64.
     """
 
     def __init__(self, n_states: int, dim: int, stickiness: float = 0.9):
@@ -45,66 +46,69 @@ class GaussianHMM(nn.Module):
 
     # -- pieces ---------------------------------------------------------------
     def _x(self, x) -> torch.Tensor:
+        """One sequence ``(T,)`` or ``(T, dim)``, or a batch of equal-length sequences ``(B, T, dim)``."""
         x = torch.as_tensor(np.asarray(x) if not torch.is_tensor(x) else x, dtype=torch.float64)
         if x.ndim == 1:
             x = x.unsqueeze(-1)
-        if x.ndim != 2 or x.shape[1] != self.dim:
-            raise ValueError(f"expected a (T, {self.dim}) sequence, got {tuple(x.shape)}")
+        if x.ndim not in (2, 3) or x.shape[-1] != self.dim:
+            raise ValueError(f"expected a (T, {self.dim}) sequence or a (B, T, {self.dim}) batch, got {tuple(x.shape)}")
         return x
 
     def emission_log_prob(self, x: torch.Tensor) -> torch.Tensor:
-        """``log p(x_t | state k)``: ``(T, K)``."""
-        diff = x.unsqueeze(1) - self.means.unsqueeze(0)
-        lv = self.logvars.unsqueeze(0)
-        return (-0.5 * (diff ** 2 / lv.exp() + lv + _LOG_2PI)).sum(-1)
+        """``log p(x_t | state k)``: ``(..., T, K)``."""
+        diff = x.unsqueeze(-2) - self.means
+        return (-0.5 * (diff ** 2 / self.logvars.exp() + self.logvars + _LOG_2PI)).sum(-1)
 
     def _forward(self, log_b: torch.Tensor) -> torch.Tensor:
         log_a = F.log_softmax(self.trans_logits, dim=1)
-        alpha = [F.log_softmax(self.start_logits, dim=0) + log_b[0]]
-        for t in range(1, log_b.shape[0]):
-            alpha.append(torch.logsumexp(alpha[-1].unsqueeze(1) + log_a, dim=0) + log_b[t])
-        return torch.stack(alpha)
+        alpha = [F.log_softmax(self.start_logits, dim=0) + log_b[..., 0, :]]
+        for t in range(1, log_b.shape[-2]):
+            alpha.append(torch.logsumexp(alpha[-1].unsqueeze(-1) + log_a, dim=-2) + log_b[..., t, :])
+        return torch.stack(alpha, dim=-2)
 
     def _backward(self, log_b: torch.Tensor) -> torch.Tensor:
         log_a = F.log_softmax(self.trans_logits, dim=1)
-        beta = [torch.zeros(self.n_states, dtype=log_b.dtype)]
-        for t in range(log_b.shape[0] - 1, 0, -1):
-            beta.append(torch.logsumexp(log_a + (log_b[t] + beta[-1]).unsqueeze(0), dim=1))
-        return torch.stack(beta[::-1])
+        beta = [torch.zeros_like(log_b[..., 0, :])]
+        for t in range(log_b.shape[-2] - 1, 0, -1):
+            beta.append(torch.logsumexp(log_a + (log_b[..., t, :] + beta[-1]).unsqueeze(-2), dim=-1))
+        return torch.stack(beta[::-1], dim=-2)
 
     # -- inference ------------------------------------------------------------
     def log_likelihood(self, x) -> torch.Tensor:
-        """``log p(x_1..T)`` of one sequence."""
-        return torch.logsumexp(self._forward(self.emission_log_prob(self._x(x)))[-1], dim=0)
+        """``log p(x_1..T)``: a scalar for one sequence, ``(B,)`` for a batch."""
+        return torch.logsumexp(self._forward(self.emission_log_prob(self._x(x)))[..., -1, :], dim=-1)
 
     @torch.no_grad()
     def posterior(self, x) -> torch.Tensor:
-        """State probabilities at every position given the whole sequence: ``(T, K)``."""
+        """State probabilities at every position given the whole sequence: ``(T, K)`` or ``(B, T, K)``.
+
+        Pass many equal-length sequences as one ``(B, T, dim)`` batch; they are decoded together,
+        which is far faster than calling this once per sequence.
+        """
         log_b = self.emission_log_prob(self._x(x))
-        g = self._forward(log_b) + self._backward(log_b)
-        return torch.softmax(g, dim=1)
+        return torch.softmax(self._forward(log_b) + self._backward(log_b), dim=-1)
 
     @torch.no_grad()
     def viterbi(self, x) -> torch.Tensor:
-        """Most probable state path: ``(T,)`` integers."""
+        """Most probable state path: ``(T,)`` or ``(B, T)`` integers."""
         log_b = self.emission_log_prob(self._x(x))
         log_a = F.log_softmax(self.trans_logits, dim=1)
-        delta = F.log_softmax(self.start_logits, dim=0) + log_b[0]
+        delta = F.log_softmax(self.start_logits, dim=0) + log_b[..., 0, :]
         back = []
-        for t in range(1, log_b.shape[0]):
-            score, arg = (delta.unsqueeze(1) + log_a).max(dim=0)
+        for t in range(1, log_b.shape[-2]):
+            score, arg = (delta.unsqueeze(-1) + log_a).max(dim=-2)
             back.append(arg)
-            delta = score + log_b[t]
-        path = [int(delta.argmax())]
+            delta = score + log_b[..., t, :]
+        path = [delta.argmax(dim=-1)]
         for arg in reversed(back):
-            path.append(int(arg[path[-1]]))
-        return torch.tensor(path[::-1], dtype=torch.long)
+            path.append(arg.gather(-1, path[-1].unsqueeze(-1)).squeeze(-1))
+        return torch.stack(path[::-1], dim=-1)
 
     # -- fitting --------------------------------------------------------------
     def initialise(self, x, seed: int = 0) -> None:
         """Start the means at quantiles along the first principal direction and the
         variances at the overall variance."""
-        x = self._x(x)
+        x = self._x(x).reshape(-1, self.dim)
         g = torch.Generator().manual_seed(int(seed))
         centred = x - x.mean(0)
         direction = torch.linalg.svd(centred, full_matrices=False)[2][0] if x.shape[0] > 1 else torch.ones(self.dim, dtype=x.dtype)
@@ -117,13 +121,13 @@ class GaussianHMM(nn.Module):
             self.logvars.copy_(torch.log(x.var(0).clamp_min(1e-6)).expand_as(self.logvars))
 
     def fit(self, x, n_iter: int = 200, lr: float = 0.05, seed: int = 0, initialise: bool = True) -> "GaussianHMM":
-        """Maximise the log-likelihood of one sequence by gradient ascent (Adam)."""
+        """Maximise the log-likelihood of one sequence, or of a batch of sequences, by gradient ascent (Adam)."""
         x = self._x(x)
         if initialise:
             self.initialise(x, seed)
         opt = torch.optim.Adam(self.parameters(), lr=lr)
         for _ in range(int(n_iter)):
-            loss = -self.log_likelihood(x) / x.shape[0]
+            loss = -self.log_likelihood(x).sum() / x[..., 0].numel()
             opt.zero_grad()
             loss.backward()
             opt.step()

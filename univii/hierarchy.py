@@ -17,7 +17,7 @@ import scipy.sparse as sp
 import torch
 from scipy.sparse.csgraph import connected_components, dijkstra, minimum_spanning_tree
 
-from .geometry import LatentGeometry, pairwise_latent_distance, tree_distance_matrix
+from .geometry import LatentGeometry, pairwise_latent_distance, rows_per_chunk, tree_distance_matrix
 
 
 def _np(z) -> np.ndarray:
@@ -97,6 +97,7 @@ def graph_pseudotime(z, root_mask, k: int = 15, geometry: str = "euclidean", hyp
     if root_mask.shape != (n,) or not root_mask.any():
         raise ValueError("root_mask must be a boolean array over cells with at least one True")
     k = min(int(k), n - 1)
+    chunk = rows_per_chunk(n, chunk)
     rows, cols, vals = [], [], []
     for start in range(0, n, chunk):
         D = pairwise_latent_distance(z[start:start + chunk], z, geometry, hyperbolic_dim, curvature)

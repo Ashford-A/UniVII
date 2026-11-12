@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.1
+
+### Changed
+
+- *Memory*: all-pairs latent distances no longer build a cells x cells x dimensions array. `LatentGeometry.cdist`
+  and the new `cdist_sq` compute them from inner products, in every geometry. This removes out-of-memory
+  failures in the cohort-alignment term (`cohort_mmd_weight`), the contrastive term (`contrastive_weight`),
+  `pairwise_latent_distance`, and everything built on them.
+- *Neighbour searches*: `transfer_labels`, `cohort_mixing` and `label_purity` use an indexed search in
+  Euclidean spaces, and size their blocks to the reference in other geometries. They now work on embeddings
+  with thousands of dimensions and on references with hundreds of thousands of cells. `graph_pseudotime`
+  sizes its blocks the same way.
+- *Hidden Markov model*: `GaussianHMM.posterior`, `viterbi`, `log_likelihood` and `fit` accept a batch of
+  equal-length sequences `(B, T, dim)` and process them together, about seventy times faster than one call per
+  sequence in a test with 5,000 sequences.
+
+Results are unchanged: the new routines are tested against the previous ones.
+
 ## 0.2.0
 
 ### Added

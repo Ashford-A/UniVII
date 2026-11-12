@@ -32,7 +32,7 @@ UniVII is a separate package with its own name, `univii`. It does not replace, m
 | Status | published, stable | extensions under active development |
 | Python import | `import univi` | `import univii` |
 | Distribution and command | `univi` | `univii` |
-| Version | 1.2.1 | 0.2.0 |
+| Version | 1.2.1 | 0.2.1 |
 | Install | `pip install univi`, conda-forge | `pip install univii` |
 | Hosted documentation | [univi.readthedocs.io](https://univi.readthedocs.io/) | the [`docs/`](https://github.com/Ashford-A/UniVII/tree/main/docs) folder; no hosted site yet |
 | Dataset cache | `~/.cache/univi`, `UNIVI_DATA_DIR` | `~/.cache/univii`, `UNIVII_DATA_DIR` |
@@ -73,7 +73,7 @@ pip install -e ".[tutorials,test]"
 UniVII requires PyTorch. If `import torch` fails, or you need a specific CUDA build, install PyTorch first from [pytorch.org](https://pytorch.org/get-started/locally/). Check the installation with:
 
 ```bash
-python -c "import univii; print(univii.__version__)"        # 0.2.0
+python -c "import univii; print(univii.__version__)"        # 0.2.1
 ```
 
 ## Quickstart
@@ -224,7 +224,7 @@ pip install -e ".[tutorials,test]"
 python -m pytest -q tests                 # unit tests and all tutorial notebooks on synthetic data
 ```
 
-What the tests do not cover, as of 0.2.0:
+What the tests do not cover, as of 0.2.1:
 
 - GPU and Apple MPS. Everything was run on CPU. On MPS the hyperbolic computations use float32; keep `hyperbolic_max_radius` at or below about 4.
 - Real Visium data. `tiles_from_visium` is tested on a synthetic AnnData in the Scanpy layout.

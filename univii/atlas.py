@@ -24,7 +24,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from .geometry import pairwise_latent_distance
+from .geometry import pairwise_latent_distance, rows_per_chunk
 
 
 class MosaicLoader:
@@ -261,13 +261,28 @@ def _np(z) -> np.ndarray:
 
 def _knn(query: np.ndarray, ref: np.ndarray, k: int, geo: Mapping[str, Any], exclude_self: bool,
          chunk: int = 1024) -> Tuple[np.ndarray, np.ndarray]:
-    """Indices and distances of the k nearest reference rows for every query row."""
+    """Indices and distances of the k nearest reference rows for every query row.
+
+    Euclidean spaces use a tree or brute-force index from scikit-learn. Other
+    geometries compute geodesic distances in blocks sized to the reference, so
+    memory stays bounded however many reference cells there are. With
+    ``exclude_self`` the query must be the reference itself.
+    """
     k = min(int(k), ref.shape[0] - (1 if exclude_self else 0))
     if k < 1:
         raise ValueError("not enough cells for a neighbour search")
+    if geo.get("geometry", "euclidean") == "euclidean":
+        from sklearn.neighbors import NearestNeighbors
+        dist, idx = NearestNeighbors(n_neighbors=k + int(exclude_self)).fit(ref).kneighbors(query)
+        if exclude_self:                                       # drop each row's own index; if absent (duplicates), drop the farthest
+            own = idx == np.arange(query.shape[0])[:, None]
+            order = np.argsort(own, axis=1, kind="stable")
+            idx, dist = np.take_along_axis(idx, order, 1)[:, :k], np.take_along_axis(dist, order, 1)[:, :k]
+        return idx, dist
+    step = rows_per_chunk(ref.shape[0], chunk)
     idx_out, dist_out = [], []
-    for start in range(0, query.shape[0], chunk):
-        D = pairwise_latent_distance(query[start:start + chunk], ref, **geo)
+    for start in range(0, query.shape[0], step):
+        D = pairwise_latent_distance(query[start:start + step], ref, **geo)
         if exclude_self:
             D[np.arange(D.shape[0]), np.arange(start, start + D.shape[0])] = np.inf
         idx = np.argpartition(D, k - 1, axis=1)[:, :k]

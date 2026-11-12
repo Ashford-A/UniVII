@@ -697,7 +697,7 @@ class UniVIMultiModalVAE(nn.Module):
         for i in range(len(names)):
             for j in range(i + 1, len(names)):
                 a, b = mu_dict[names[i]], mu_dict[names[j]]
-                logits = -self._latent_sqdist(a.unsqueeze(1), b.unsqueeze(0)) / tau
+                logits = -self.latent.cdist_sq(a, b) / tau
                 terms.append(0.5 * (F.cross_entropy(logits, target, reduction="none")
                                     + F.cross_entropy(logits.t(), target, reduction="none")))
         return torch.stack(terms, dim=0).mean(dim=0)
@@ -707,9 +707,7 @@ class UniVIMultiModalVAE(nn.Module):
 
         Gaussian kernels at six widths, from 1/16 of the median cross distance to twice it, so
         that both a global shift and a small offset inside tight clusters are seen."""
-        d_ab = self._latent_sqdist(a.unsqueeze(1), b.unsqueeze(0))
-        d_aa = self._latent_sqdist(a.unsqueeze(1), a.unsqueeze(0))
-        d_bb = self._latent_sqdist(b.unsqueeze(1), b.unsqueeze(0))
+        d_ab, d_aa, d_bb = self.latent.cdist_sq(a, b), self.latent.cdist_sq(a, a), self.latent.cdist_sq(b, b)
         base = d_ab.detach().median().clamp_min(1e-6)
         total = 0.0
         scales = (1.0 / 256, 1.0 / 64, 1.0 / 16, 0.25, 1.0, 4.0)        # on squared distance

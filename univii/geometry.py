@@ -368,9 +368,29 @@ class LatentGeometry(nn.Module):
         """Geodesic distance between rows of ``a`` and ``b`` (broadcasts)."""
         return torch.sqrt(self.sqdist(a, b) + _EPS)
 
+    def cdist_sq(self, a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+        """All-pairs ``(n, m)`` squared geodesic distance.
+
+        Computed from inner products, so memory is ``O(n * m)`` and not
+        ``O(n * m * latent_dim)`` as with broadcasting :meth:`sqdist`.
+        """
+        (e_a, h_a), (e_b, h_b) = self.split(a), self.split(b)
+        out = None
+        if self.euclidean_dim:
+            out = ((e_a ** 2).sum(-1, keepdim=True) + (e_b ** 2).sum(-1).unsqueeze(0) - 2.0 * e_a @ e_b.transpose(0, 1)).clamp_min(0.0)
+        if self.hyperbolic_dim:
+            wd = _work_dtype(h_a)
+            sc = self._sqrt_c(h_a.to(wd))
+            x, y = expmap0(sc * h_a.to(wd)), expmap0(sc * h_b.to(wd))
+            inner = x[:, 1:] @ y[:, 1:].transpose(0, 1) - x[:, :1] @ y[:, :1].transpose(0, 1)      # Lorentz inner product
+            s = (-2.0 - 2.0 * inner).clamp_min(1e-24)                                             # <x - y, x - y>_L
+            d2 = ((2.0 * torch.asinh(0.5 * torch.sqrt(s)) / sc) ** 2).to(a.dtype)
+            out = d2 if out is None else out + d2
+        return out
+
     def cdist(self, a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
-        """All-pairs ``(n, m)`` geodesic distance."""
-        return self.dist(a.unsqueeze(1), b.unsqueeze(0))
+        """All-pairs ``(n, m)`` geodesic distance (memory ``O(n * m)``)."""
+        return torch.sqrt(self.cdist_sq(a, b) + _EPS)
 
     def radius(self, t: torch.Tensor) -> torch.Tensor:
         """Geodesic distance from the origin (the anchor, for anchored coordinates)."""
@@ -498,6 +518,11 @@ def pairwise_latent_distance(a: ArrayLike, b: Optional[ArrayLike] = None, geomet
     ta = _as_tensor(a)
     tb = ta if b is None else _as_tensor(b)
     return torch.cat([geom.cdist(ta[i:i + chunk], tb) for i in range(0, len(ta), chunk)]).numpy()
+
+
+def rows_per_chunk(n_columns: int, requested: int = 1024, budget: float = 5e7) -> int:
+    """How many query rows to process at once so that a ``rows x n_columns`` block stays near 400 MB."""
+    return int(max(8, min(int(requested), budget // max(int(n_columns), 1))))
 
 
 def latent_radius(z: ArrayLike) -> np.ndarray:
