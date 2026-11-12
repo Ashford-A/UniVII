@@ -72,6 +72,72 @@ def test_tutorial_executes(path, synthetic_registry, tmp_path, monkeypatch):
     assert idx is not None, f"{path.name} needs a cell tagged 'parameters'"
     nb.cells.insert(idx + 1, nbformat.v4.new_code_cell(OVERRIDES))
 
+    if path.name == "toolkit.ipynb":
+        prepared = _write_toolkit_fixture(tmp_path / "prepared")
+        nb.cells.insert(idx + 2, nbformat.v4.new_code_cell(f"""
+# Offline AML/geometry smoke test; public atlas/image sections are omitted.
+DATA_MODE = 'prepared'
+DATA_DIR = Path({str(prepared)!r})
+RESULTS = Path({str(tmp_path / 'results')!r})
+N_EPOCHS = 2
+BATCH_SIZE = 64
+SEEDS = (0, 1)
+MAX_GRAPH_CELLS = 300
+RUN_GEOMETRY_SWEEP = True
+RUN_MOSAIC = False
+RUN_ANNOTATED_ATLAS = False
+RUN_HISTOLOGY = False
+import torch, urllib.request
+torch.set_num_threads(1)
+# Fail rather than silently downloading real data during this smoke test.
+def _offline_urlopen(*args, **kwargs):
+    raise AssertionError('Unexpected network access in toolkit CI')
+urllib.request.urlopen = _offline_urlopen
+"""))
+
     client = nbclient.NotebookClient(nb, timeout=900, kernel_name="python3",
                                      resources={"metadata": {"path": str(tmp_path)}})
     client.execute()
+    if path.name == "toolkit.ipynb":
+        import pandas as pd
+        runs = pd.read_csv(tmp_path / "results" / "geometry_comparison.csv")
+        assert set(runs["variant"]) == {"euclidean", "hyperbolic", "product"}
+        assert len(runs) == 6  # Three geometries, two seeds each.
+        for name in ["latent_anchored.npy", "sampled_graph_pseudotime.csv",
+                     "hmm_states.png", "run_manifest.json"]:
+            assert (tmp_path / "results" / name).is_file(), name
+
+
+def _write_toolkit_fixture(folder):
+    """Small, explicitly synthetic prepared AML input; never biological evidence.
+
+    Exercise the notebook's prepared-data validation, training, anchoring,
+    hierarchy, HMM, figures and all three latent geometries. Public download,
+    mosaic/annotated atlas and histology sections are not exercised here.
+    """
+    import json
+    import numpy as np
+    import pandas as pd
+    import anndata as ad
+
+    folder.mkdir(parents=True)
+    rng = np.random.default_rng(42)
+    parents = {"HSC": None, "Prog": "HSC", "GMP": "Prog",
+               "ProMono": "GMP", "Mono": "ProMono"}
+    labels = np.tile(np.repeat(list(parents), 16), 3)
+    sample = np.repeat(["ci_train", "ci_null", "ci_query"], 80)
+    train = sample == "ci_train"
+    null = sample == "ci_null"
+    codes = pd.Categorical(labels, categories=list(parents)).codes
+    centres = rng.normal(0, 0.25, (5, 16))
+    X = (centres[codes] + rng.normal(0, 0.08, (len(labels), 16))).astype("float32")
+    obs = pd.DataFrame({"label": labels, "sample": sample, "donor": sample,
+                        "cohort": "synthetic_ci", "healthy_donor": train | null},
+                       index=[f"ci_cell_{i}" for i in range(len(labels))])
+    obs.to_csv(folder / "prepared_obs.csv")
+    np.save(folder / "X_anchor.npy", X)
+    np.savez_compressed(folder / "split_masks.npz", train=train, null=null)
+    a = ad.AnnData(X, obs=obs)
+    a.uns["tree_json"] = json.dumps(parents)
+    a.write_h5ad(folder / "anchored_input.h5ad")
+    return folder
