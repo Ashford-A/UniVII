@@ -1,6 +1,7 @@
 # UniVII
 
 [![Paper](https://img.shields.io/badge/Genome%20Research-10.1101%2Fgr.281431.125-1f5f8b)](https://doi.org/10.1101/gr.281431.125)
+[![Zenodo DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24149077.svg)](https://doi.org/10.5281/zenodo.24149077)
 [![Tests](https://github.com/Ashford-A/UniVII/actions/workflows/docs.yml/badge.svg)](https://github.com/Ashford-A/UniVII/actions/workflows/docs.yml)
 [![Python](https://img.shields.io/badge/python-%E2%89%A53.10-blue)](https://github.com/Ashford-A/UniVII/blob/main/pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-red.svg)](https://github.com/Ashford-A/UniVII/blob/main/LICENSE)
