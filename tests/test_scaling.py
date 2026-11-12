@@ -57,7 +57,10 @@ def test_neighbour_tools_handle_wide_embeddings_and_agree_across_code_paths():
     assert np.allclose(euclid["novelty"], product["novelty"], rtol=1e-4)
     assert rows_per_chunk(100) == 1024 and rows_per_chunk(10_000_000) == 8 and rows_per_chunk(100_000) == 500
     d = pairwise_latent_distance(low[:10], low[:7])
-    assert np.allclose(d, np.sqrt(((low[:10, None] - low[None, :7]) ** 2).sum(-1)), atol=1e-6)
+    expected_sq = ((low[:10, None] - low[None, :7]) ** 2).sum(-1)
+    # Match the distance API's epsilon stabilization at zero.
+    expected = np.sqrt(expected_sq + 1e-12)
+    np.testing.assert_allclose(d, expected, rtol=1e-7, atol=1e-8)
 
 
 def test_hmm_batch_inference_equals_one_sequence_at_a_time():
