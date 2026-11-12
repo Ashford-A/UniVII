@@ -386,6 +386,11 @@ class LatentGeometry(nn.Module):
             s = (-2.0 - 2.0 * inner).clamp_min(1e-24)                                             # <x - y, x - y>_L
             d2 = ((2.0 * torch.asinh(0.5 * torch.sqrt(s)) / sc) ** 2).to(a.dtype)
             out = d2 if out is None else out + d2
+        # Identical points have zero squared distance. Inner-product
+        # cancellation can otherwise leave small positive diagonal errors.
+        if a is b:
+            out = out.clone()
+            out.diagonal().zero_()
         return out
 
     def cdist(self, a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
